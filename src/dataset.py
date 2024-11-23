@@ -47,7 +47,7 @@ class TofDataset(Dataset):
             'source_values': torch.tensor(item['source_values'], dtype=torch.float32),
             'receiver_positions': torch.tensor(item['receiver_positions'], dtype=torch.float32),
             'receiver_values': torch.tensor(item['receiver_values'].reshape(32, 32), dtype=torch.float32).unsqueeze(0),
-            'sos_values': torch.tensor(sos, dtype=torch.float32)
+            'sos_values': torch.tensor(sos, dtype=torch.float32),
             'tof_images': torch.tensor(self.tof_images[idx], dtype=torch.float32)
         }
 

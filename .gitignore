@@ -2,4 +2,6 @@
 inputData
 myOutputs
 fpenv
-Terminal_and_HTML_Code/__pycache__/
+/src/Terminal_and_HTML_Code/__pycache__/
+/src/train_validation.pcl
+/src/__pycache__/
