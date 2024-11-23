@@ -5,3 +5,6 @@ scipy
 opencv-python
 torch
 torchvision
+pandas
+mpld3
+

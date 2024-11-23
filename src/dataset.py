@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from scipy.io import loadmat
 from PIL import Image
 import cv2
+import pickle
 
 class TofDataset(Dataset):
     def __init__(self, modes, p, anatomy_width=128.0, anatomy_height=128.0, grid_size=128):
@@ -19,8 +20,8 @@ class TofDataset(Dataset):
         self.sos_data = []
         self.anatomy_width = anatomy_width
         self.anatomy_height = anatomy_height
-        self.min_sos = 0.145  # speed of sound in water (background)
-        self.max_sos = 0.14   # speed of sound in anatomy
+        self.min_sos = 0.140  # speed of sound in anatomy
+        self.max_sos = 0.145  # speed of sound in water (background)
         self.grid_size = grid_size
         self.modes_path = {
             'train': '../inputData/ForLearning/',
@@ -28,9 +29,12 @@ class TofDataset(Dataset):
             'test': '../inputData/ForTest/'
         }
         self.tof_path = '../inputData/TimeOfFlightData/'
-        self.load()
+        #self.load()
         
-
+    @staticmethod
+    def load_dataset(source_file):
+        with open(source_file, 'rb') as file:
+            return pickle.load(file)
     def __len__(self):
         return len(self.tof_data)
 
@@ -42,8 +46,9 @@ class TofDataset(Dataset):
             'source_positions': torch.tensor(item['source_positions'], dtype=torch.float32),
             'source_values': torch.tensor(item['source_values'], dtype=torch.float32),
             'receiver_positions': torch.tensor(item['receiver_positions'], dtype=torch.float32),
-            'receiver_values': torch.tensor(item['receiver_values'], dtype=torch.float32),
+            'receiver_values': torch.tensor(item['receiver_values'].reshape(32, 32), dtype=torch.float32).unsqueeze(0),
             'sos_values': torch.tensor(sos, dtype=torch.float32)
+            'tof_images': torch.tensor(self.tof_images[idx], dtype=torch.float32)
         }
 
     def load(self):
@@ -53,6 +58,9 @@ class TofDataset(Dataset):
         self.build_files_index(self.modes)
         for mode in self.modes:
             self._load_data(mode)
+
+
+
 
     def build_files_index(self, modes):
         """
