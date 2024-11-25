@@ -14,12 +14,12 @@ def visualize_tof_image(dataset, idx=0, p=None):
         None
     """
     if idx < 0 or idx >= len(dataset):
-        p.print(f"Index {idx} is out of range. Dataset size: {len(dataset)}")
+        log_message(f"Index {idx} is out of range. Dataset size: {len(dataset)}")
         return
 
     tof_data = dataset.tof_images[idx]
     if tof_data.ndim != 2 or tof_data.shape != (dataset.grid_size, dataset.grid_size):
-        p.print(f"Unexpected shape for ToF data: {tof_data.shape}. Expected ({dataset.grid_size}, {dataset.grid_size})")
+        log_message(f"Unexpected shape for ToF data: {tof_data.shape}. Expected ({dataset.grid_size}, {dataset.grid_size})")
         return
 
     fontsize = 16
@@ -40,7 +40,7 @@ def visualize_tof_image(dataset, idx=0, p=None):
     ax.locator_params(axis='x', nbins=nbins)
     ax.locator_params(axis='y', nbins=nbins)
     plt.tight_layout()
-    p.print('[visualization.py]: visualize_tof_image')
+    log_message('[visualization.py]: visualize_tof_image')
     plt.show()
     p.show(fig)
 
@@ -83,7 +83,7 @@ def visualize_anatomy_image(dataset, idx=0, p=None):
     ax.locator_params(axis='x', nbins=nbins)
     ax.locator_params(axis='y', nbins=nbins)
     plt.tight_layout()
-    p.print('[visualization.py]: visualize_anatomy_image')
+    log_message('[visualization.py]: visualize_anatomy_image')
     plt.show()
     p.show(fig)
 
@@ -132,7 +132,7 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
     ax.locator_params(axis='x', nbins=nbins)
     ax.locator_params(axis='y', nbins=nbins)
     plt.tight_layout()
-    p.print('[visualization.py]: visualize_sources_and_receivers')
+    log_message('[visualization.py]: visualize_sources_and_receivers')
     plt.show()
     p.show(fig)
 
@@ -151,12 +151,12 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
 #         None
 #     """
 #     if idx < 0 or idx >= len(dataset):
-#         p.print(f"Index {idx} is out of range. Dataset size: {len(dataset)}")
+#         log_message(f"Index {idx} is out of range. Dataset size: {len(dataset)}")
 #         return
 
 #     tof_data = dataset.tof_images[idx]
 #     if tof_data.ndim != 2 or tof_data.shape != (dataset.grid_size, dataset.grid_size):
-#         p.print(f"Unexpected shape for ToF data: {tof_data.shape}. Expected ({dataset.grid_size}, {dataset.grid_size})")
+#         log_message(f"Unexpected shape for ToF data: {tof_data.shape}. Expected ({dataset.grid_size}, {dataset.grid_size})")
 #         return
 
 #     fontsize = 16
@@ -175,7 +175,7 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
 #     plt.locator_params(axis='x', nbins=nbins)  # Reduce number of x-axis ticks
 #     plt.locator_params(axis='y', nbins=nbins)  # Reduce number of y-axis ticks
 #     plt.tight_layout()  # Adjust layout to fit labels and elements
-#     p.print('[visualization.py]: visualize_tof_image')
+#     log_message('[visualization.py]: visualize_tof_image')
 #     plt.show()
 #     p.show(fig)
 
@@ -216,7 +216,7 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
 #     plt.locator_params(axis='x', nbins=nbins)
 #     plt.locator_params(axis='y', nbins=nbins)
 #     plt.tight_layout()
-#     p.print('[visualization.py]: visualize_anatomy_image')
+#     log_message('[visualization.py]: visualize_anatomy_image')
 #     plt.show()
 #     p.show(fig)
 
@@ -263,7 +263,7 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
 #     plt.locator_params(axis='x', nbins=nbins)
 #     plt.locator_params(axis='y', nbins=nbins)
 #     plt.tight_layout()
-#     p.print('[visualization.py]: visualize_sources_and_receivers')
+#     log_message('[visualization.py]: visualize_sources_and_receivers')
 #     plt.show()
 #     p.show(fig)
 
@@ -283,12 +283,12 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
 #         None
 #     """
 #     if idx < 0 or idx >= len(dataset):
-#         p.print(f"Index {idx} is out of range. Dataset size: {len(dataset)}")
+#         log_message(f"Index {idx} is out of range. Dataset size: {len(dataset)}")
 #         return
 
 #     tof_data = dataset.tof_images[idx]
 #     if tof_data.ndim != 2 or tof_data.shape != (dataset.grid_size, dataset.grid_size):
-#         p.print(f"Unexpected shape for ToF data: {tof_data.shape}. Expected ({dataset.grid_size}, {dataset.grid_size})")
+#         log_message(f"Unexpected shape for ToF data: {tof_data.shape}. Expected ({dataset.grid_size}, {dataset.grid_size})")
 #         return
 
 #     fontsize = 20
@@ -303,7 +303,7 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
 #     plt.xlabel("X-axis", fontsize=fontsize)
 #     plt.ylabel("Y-axis", fontsize=fontsize)
 #     plt.tick_params(axis='both', which='major', labelsize=labelsize)
-#     p.print('[visualization.py]: visualize_tof_image')
+#     log_message('[visualization.py]: visualize_tof_image')
 #     plt.show()
 #     p.show(fig)
 
@@ -340,7 +340,7 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
 #     plt.xlabel("X-axis", fontsize=fontsize)
 #     plt.ylabel("Y-axis", fontsize=fontsize)
 #     plt.tick_params(axis='both', which='major', labelsize=labelsize)
-#     p.print('[visualization.py]: visualize_anatomy_image')
+#     log_message('[visualization.py]: visualize_anatomy_image')
 #     plt.show()
 #     p.show(fig)
 
@@ -384,6 +384,6 @@ def visualize_sources_and_receivers(dataset, idx=0, p=None):
 #     plt.legend(loc='upper right', fontsize=fontsize)
 #     plt.gca().set_aspect('equal', adjustable='box')
 #     plt.tick_params(axis='both', which='major', labelsize=labelsize)
-#     p.print('[visualization.py]: visualize_sources_and_receivers')
+#     log_message('[visualization.py]: visualize_sources_and_receivers')
 #     plt.show()
 #     p.show(fig)

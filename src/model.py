@@ -54,3 +54,28 @@ class UNet(nn.Module):
         dec2 = self.dec2(dec3 + enc2)
         dec1 = self.dec1(dec2 + enc1)
         return dec1
+
+
+class TravelTimeFCNN(nn.Module):
+    def __init__(self):
+        super(TravelTimeFCNN, self).__init__()
+        self.fcnn = nn.Sequential(
+            nn.Linear(2, 64),
+            nn.Tanh(),
+            nn.Linear(64, 64),
+            nn.Tanh(),
+            nn.Linear(64, 1)
+        )
+
+class PINNModel(nn.Module):
+    def __init__(self):
+        super(PINNModel, self).__init__()
+        self.cnn = SpeedOfSoundCNN()
+        self.fcnn = TravelTimeFCNN()
+
+    def forward(self, ToF_input, spatial_coords):
+        c = self.cnn(ToF_input)  # Estimated speed of sound map
+        T = self.fcnn(spatial_coords)  # Predicted travel time at spatial coordinates
+        return c, T
+    def forward(self, x):
+        return self.fcnn(x)  # Output is the predicted travel time T(x)

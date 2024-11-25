@@ -7,11 +7,11 @@ from scipy.io import loadmat
 from PIL import Image
 import cv2
 import pickle
-
+from logger import log_message
+from settings import  app_settings
 class TofDataset(Dataset):
-    def __init__(self, modes, p, anatomy_width=128.0, anatomy_height=128.0, grid_size=128):
+    def __init__(self, modes, anatomy_width=128.0, anatomy_height=128.0, grid_size=128):
         super().__init__()
-        self.p = p
         self.modes = modes
         self.file_index = {}
         self.tof_images = []
@@ -24,11 +24,11 @@ class TofDataset(Dataset):
         self.max_sos = 0.145  # speed of sound in water (background)
         self.grid_size = grid_size
         self.modes_path = {
-            'train': '../inputData/ForLearning/',
-            'validation': '../inputData/ForValidation/',
-            'test': '../inputData/ForTest/'
+            'train': app_settings.train_path,
+            'validation': app_settings.validation_path,
+            'test': app_settings.test_path
         }
-        self.tof_path = '../inputData/TimeOfFlightData/'
+        self.tof_path = app_settings.tof_path
         #self.load()
         
     @staticmethod
@@ -98,7 +98,7 @@ class TofDataset(Dataset):
         """
         Load anatomy, ToF, and speed-of-sound data for the specified mode.
         """
-        self.p.print(f"[dataset.py] Loading data for mode: {mode}...")
+        self.log_message(f"[dataset.py] Loading data for mode: {mode}...")
         for tumor_id, paths in self.file_index.items():
             if not all(paths.values()):
                 continue
@@ -111,13 +111,13 @@ class TofDataset(Dataset):
             self.anatomy_images.append(anatomy_img)
             self.sos_data.append(sos_data)
             self.tof_data.append(tof_data)
-        self.p.print("[dataset.py] Data loading complete.")
+        log_message("[dataset.py] Data loading complete.")
 
     def _prepare_image_data(self, path):
         """
         Read an image, convert it to grayscale, resize it, and return as a NumPy array.
         """
-        # self.p.print(f"[dataset.py] Preparing image data for path: {path}")
+        # log_message(f"[dataset.py] Preparing image data for path: {path}")
         # Ensure the image is loaded as grayscale
         image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
         if image is None:
