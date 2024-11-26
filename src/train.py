@@ -3,7 +3,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader,random_split
 from model import PINNModel
 from dataset import TofDataset
-from physics import TotalLoss ,compute_eikonal_loss
+from physics import PINNLoss
 from logger import log_message
 from report_dataset_info import report_dataset_info
 from visualization import visualize_tof_image, visualize_anatomy_image, visualize_sources_and_receivers
@@ -34,20 +34,24 @@ def train_model(dataset, num_epochs=100, batch_size=16, learning_rate=1e-4, phys
         for batch in data_loader:
             # Move data to device
             tof_input = batch['tof_input'].to(device)  # Shape: [batch_size, 1, 32, 32]
-            x_r = batch['x_r'].to(device)  # Shape: [batch_size, 2]
-            x_s = batch['x_s'].to(device)  # Shape: [batch_size, 2]
-            observed_tof = batch['observed_tof'].to(device)  # Shape: [batch_size]
+            tof_data = batch['tof_data']
+            x_r = tof_data['x_r'].to(device)  # Shape: [batch_size, 2]
+            x_s = tof_data['x_s'].to(device)  # Shape: [batch_size, 2]
+            observed_tof = tof_data['x_o'].to(device)  # Shape: [batch_size]
 
             batch_size = tof_input.shape[0]
             num_points = 1024  # Number of points for physics loss
 
-            # Generate x_coords per batch sample
-            x_coords = torch.rand((batch_size, num_points, 2), device=device)  # Random points in [0,1]
-            x_coords.requires_grad = True
-            x_coords[:, :, 0] = x_coords[:, :, 0] * L_x  # Scale to physical units
-            x_coords[:, :, 1] = x_coords[:, :, 1] * L_y  # Scale to physical units
+            # Ensure x_s has the correct shape
+            if x_s.dim() == 1:
+                x_s = x_s.unsqueeze(0)  # Shape: [1, 2]
+            x_s = x_s.expand(batch_size, -1)  # Shape: [batch_size, 2]
 
-            # For x_s_grid, repeat x_s per num_points
+            x_coords = torch.rand((batch_size, num_points, 2), device=device)
+            x_coords[:, :, 0] *= L_x  # Scale to physical units
+            x_coords[:, :, 1] *= L_y  # Scale to physical units
+            x_coords.requires_grad = True
+
             x_s_grid = x_s.unsqueeze(1).repeat(1, num_points, 1)  # Shape: [batch_size, num_points, 2]
 
             optimizer.zero_grad()
@@ -57,6 +61,7 @@ def train_model(dataset, num_epochs=100, batch_size=16, learning_rate=1e-4, phys
                 model, tof_input, x_r, x_s, observed_tof, x_coords, x_s_grid
             )
 
+            # Backpropagation and optimization
             total_loss.backward()
             optimizer.step()
 

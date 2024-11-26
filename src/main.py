@@ -14,7 +14,7 @@ if __name__ == "__main__":
     log_message("[main.py] Starting PINN training pipeline...")
     log_message(' ')
     epochs = 3 #200
-    cached_dataset= app_settings.cached_dataset
-    dataset = TofDataset.load_dataset(cached_dataset)
-    train_model(dataset, num_epochs=epochs, batch_size=1, learning_rate=1e-3)
+
+    dataset = TofDataset(['train', 'validation'])
+    train_model(dataset, num_epochs=epochs, batch_size=16, learning_rate=1e-3)
     log_message("[main.py] Training pipeline complete.")

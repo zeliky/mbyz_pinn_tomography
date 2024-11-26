@@ -61,7 +61,18 @@ class PINNModel(nn.Module):
         self.fcnn = TravelTimeFCNN()
 
     def forward(self, tof_input, x_r, x_s, x_coords):
-        c = self.cnn(tof_input)  # Estimated SoS map
-        T_pred = self.fcnn(x_r, x_s)  # Predicted travel time at receivers
-        T_grid = self.fcnn(x_coords, x_s)  # Predicted T(x) at grid points for physics loss
-        return c, T_pred, T_grid
+        # Estimate speed of sound map
+        c_map = self.cnn(tof_input)  # Shape: [batch_size, 1, H, W]
+
+        # Predict travel time at receiver positions
+        T_pred = self.fcnn(x_r, x_s)  # Shape: [batch_size, 1]
+
+        # Predict travel time at grid points for physics loss
+        batch_size, num_points, _ = x_coords.shape
+        x_coords_flat = x_coords.view(-1, 2)
+        x_s_grid_flat = x_s.unsqueeze(1).repeat(1, num_points, 1).view(-1, 2)
+        T_grid_flat = self.fcnn(x_coords_flat, x_s_grid_flat)  # Shape: [batch_size * num_points, 1]
+        T_grid = T_grid_flat.view(batch_size, num_points)  # Reshape back to [batch_size, num_points]
+
+        return c_map, T_pred, T_grid
+
