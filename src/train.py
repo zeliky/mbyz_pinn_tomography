@@ -1,55 +1,78 @@
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader,random_split
-from model import UNet
+from model import PINNModel
 from dataset import TofDataset
 from physics import TotalLoss ,compute_eikonal_loss
 from logger import log_message
 from report_dataset_info import report_dataset_info
 from visualization import visualize_tof_image, visualize_anatomy_image, visualize_sources_and_receivers
 
-def train_model(dataset:TofDataset, num_epochs=100, batch_size=1, learning_rate=1e-4):
+
+def train_model(dataset, num_epochs=100, batch_size=16, learning_rate=1e-4, physics_loss_weight=1.0, L_x=0.1, L_y=0.1):
     log_message("[train.py] Initializing training...")
     log_message(' ')
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model = UNet().to(device)
-    
-    #train_data, val_data = random_split(dataset, [500, 298])
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    model = PINNModel().to(device)
+
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = TotalLoss(lambda_data=1.0, lambda_physics=0.1)
+
+    # Define the custom loss function
+    loss_fn = PINNLoss(physics_loss_weight, L_x, L_y)
 
     log_message("[train.py] Starting training loop...")
     log_message(' ')
-    loss =None
+
     for epoch in range(num_epochs):
         model.train()
-        total_loss = 0.0
+        total_loss_epoch = 0.0
+        total_data_loss_epoch = 0.0
+        total_physics_loss_epoch = 0.0
+        num_batches = 0
 
-        for batch in dataloader:
+        for batch in data_loader:
+            # Move data to device
+            tof_input = batch['tof_input'].to(device)  # Shape: [batch_size, 1, 32, 32]
+            x_r = batch['x_r'].to(device)  # Shape: [batch_size, 2]
+            x_s = batch['x_s'].to(device)  # Shape: [batch_size, 2]
+            observed_tof = batch['observed_tof'].to(device)  # Shape: [batch_size]
 
-            coords = batch['coords'].view(-1, 2).to(device).requires_grad_(True)  # Flatten to (N, 2)
-            sos_values = batch['sos_values'].view(-1).to(device)  # Flatten to (N,)
-            source_positions = batch['source_positions'].to(device)
-            source_values = batch['source_values'].to(device)
-            receiver_positions = batch['receiver_positions'].to(device)
-            receiver_values = batch['receiver_values'].to(device)
-            print(receiver_values.shape)
-            pinn_output = model(receiver_values)
+            batch_size = tof_input.shape[0]
+            num_points = 1024  # Number of points for physics loss
 
-            # Forward pass
-            sos_pred = model(receiver_values)
+            # Generate x_coords per batch sample
+            x_coords = torch.rand((batch_size, num_points, 2), device=device)  # Random points in [0,1]
+            x_coords.requires_grad = True
+            x_coords[:, :, 0] = x_coords[:, :, 0] * L_x  # Scale to physical units
+            x_coords[:, :, 1] = x_coords[:, :, 1] * L_y  # Scale to physical units
 
-            # Compute loss
-            loss = criterion(sos_pred, sos_values, tof_images)
+            # For x_s_grid, repeat x_s per num_points
+            x_s_grid = x_s.unsqueeze(1).repeat(1, num_points, 1)  # Shape: [batch_size, num_points, 2]
 
-            # Backward pass and optimization
             optimizer.zero_grad()
-            loss.backward()
+
+            # Compute the loss
+            total_loss, data_loss_value, physics_loss_value = loss_fn(
+                model, tof_input, x_r, x_s, observed_tof, x_coords, x_s_grid
+            )
+
+            total_loss.backward()
             optimizer.step()
 
-        if loss is not None:
-            log_message(f"[train.py] Epoch {epoch + 1}/{num_epochs}, Total Loss: {loss.item():.6f}")
+            # Accumulate losses
+            total_loss_epoch += total_loss.item()
+            total_data_loss_epoch += data_loss_value
+            total_physics_loss_epoch += physics_loss_value
+            num_batches += 1
 
-    log_message("[train.py] Training complete.")
-    log_message(' ')
+        # Calculate average losses
+        avg_total_loss = total_loss_epoch / num_batches
+        avg_data_loss = total_data_loss_epoch / num_batches
+        avg_physics_loss = total_physics_loss_epoch / num_batches
+
+        # Print epoch statistics
+        log_message(f'Epoch [{epoch + 1}/{num_epochs}], Total Loss: {avg_total_loss:.6f}, '
+                    f'Data Loss: {avg_data_loss:.6f}, Physics Loss: {avg_physics_loss:.6f}')
+
+    return model

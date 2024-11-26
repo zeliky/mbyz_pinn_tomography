@@ -9,6 +9,4 @@ class AppSettings:
 
 
 
-
-# Usage
 app_settings = AppSettings()

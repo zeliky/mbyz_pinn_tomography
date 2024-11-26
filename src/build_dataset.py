@@ -1,16 +1,23 @@
 from dataset import TofDataset
 from report_dataset_info import report_dataset_info
 from Terminal_and_HTML_Code.Terminal_and_HTML import terminal_html
+from torch.utils.data import DataLoader
 
 
 folder = "../myOutputs/"
 formatted_datetime, p = terminal_html(folder)
-dataset = TofDataset(['train', 'validation'], p)
-dataset.store_dataset('train_validation.pcl')
-report_dataset_info(dataset, p)
+dataset = TofDataset(['train', 'validation'])
 
+data_loader = DataLoader(dataset, batch_size=16, shuffle=True, num_workers=4)
 
-# Visualize the first ToF image
-visualize_tof_image(dataset, idx=0, p=p)
-visualize_anatomy_image(dataset, idx=0, p=p)
-visualize_sources_and_receivers(dataset, idx=0, p=p)
+for batch in data_loader:
+    tof_input = batch['tof_input']  # Shape: [batch_size, 1, 128, 128]
+    sos_image = batch['sos_image']  # Shape: [batch_size, 1, 128, 128]
+    tof_data = batch['tof_data']  # Shape: [batch_size, 1, 128, 128]
+    print(f"tof: {tof_input.shape}")
+    print(f"sos: {sos_image.shape}")
+    print(f"source: {tof_data['x_s'].shape}")
+    print(f"receivers: {tof_data['x_r'].shape}")
+    print(f"observed_tof: {tof_data['x_o'].shape}")
+    break
+

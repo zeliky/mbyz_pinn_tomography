@@ -3,66 +3,105 @@ import re
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from torchvision import transforms
 from scipy.io import loadmat
 from PIL import Image
 import cv2
 import pickle
 from logger import log_message
 from settings import  app_settings
+
 class TofDataset(Dataset):
-    def __init__(self, modes, anatomy_width=128.0, anatomy_height=128.0, grid_size=128):
+    def __init__(self, modes, **kwargs):
         super().__init__()
         self.modes = modes
         self.file_index = {}
-        self.tof_images = []
-        self.anatomy_images = []
-        self.tof_data = []
-        self.sos_data = []
-        self.anatomy_width = anatomy_width
-        self.anatomy_height = anatomy_height
-        self.min_sos = 0.140  # speed of sound in anatomy
-        self.max_sos = 0.145  # speed of sound in water (background)
-        self.grid_size = grid_size
+
+        self.sources_amount = kwargs.get('sources_amount', 32)
+        self.receivers_amount = kwargs.get('receivers_amount', 32)
+        self.anatomy_width = kwargs.get('anatomy_width', 128.0)
+
+        self.anatomy_height = kwargs.get('anatomy_height', 128.0)
+        self.grid_size = kwargs.get('grid_size', 128.0)
+
+        self.min_sos = kwargs.get('min_sos', 0.140)   # speed of sound in anatomy
+        self.max_sos = kwargs.get('min_sos', 0.145)    # speed of sound in water (background)
+
+        self.min_tof = kwargs.get('min_tof', 0)  # min observed tof ???
+        self.max_tof = kwargs.get('max_tof', 100)  # max observed tof ???
+
         self.modes_path = {
             'train': app_settings.train_path,
             'validation': app_settings.validation_path,
             'test': app_settings.test_path
         }
         self.tof_path = app_settings.tof_path
-        #self.load()
-        
+
+        self._build_files_index(self.modes)
+
     @staticmethod
     def load_dataset(source_file):
         with open(source_file, 'rb') as file:
             return pickle.load(file)
     def __len__(self):
-        return len(self.tof_data)
+        return len(self.file_index)
 
     def __getitem__(self, idx):
-        item = self.tof_data[idx]
-        sos = self.sos_data[idx]
+        paths = self.file_index[idx]
+        tof_data = self._prepare_mat_data(paths['mat'])
+        tof_input = self._prepare_image(paths['tof'],(self.sources_amount, self.receivers_amount), self.min_tof, self.max_tof)
+        sos_image = self._prepare_image(paths['anatomy'], (int(self.anatomy_width), int(self.anatomy_height)), self.min_sos, self.max_sos)
+
         return {
-            'coords': torch.tensor(item['coords'], dtype=torch.float32),
-            'source_positions': torch.tensor(item['source_positions'], dtype=torch.float32),
-            'source_values': torch.tensor(item['source_values'], dtype=torch.float32),
-            'receiver_positions': torch.tensor(item['receiver_positions'], dtype=torch.float32),
-            'receiver_values': torch.tensor(item['receiver_values'].reshape(32, 32), dtype=torch.float32).unsqueeze(0),
-            'sos_values': torch.tensor(sos, dtype=torch.float32),
-            'tof_images': torch.tensor(self.tof_images[idx], dtype=torch.float32)
+            'tof_data': tof_data,
+            'tof_input': tof_input,
+            'sos_image':  sos_image
         }
 
-    def load(self):
-        """
-        Load all data for the specified modes.
-        """
-        self.build_files_index(self.modes)
-        for mode in self.modes:
-            self._load_data(mode)
+    def _prepare_mat_data(self, path):
+        mat_data = loadmat(path)
 
+        xs_sources = np.array(mat_data['xs_sources']).flatten()
+        ys_sources = np.array(mat_data['ys_sources']).flatten()
+        source_positions = np.column_stack([xs_sources, ys_sources])
 
+        xs_receivers = np.array(mat_data['xs_receivers']).flatten()
+        ys_receivers = np.array(mat_data['ys_receivers']).flatten()
+        receiver_positions = np.column_stack([xs_receivers, ys_receivers])
 
+        tof_to_receivers = np.array(mat_data['t_obs'])
 
-    def build_files_index(self, modes):
+        source_indices, receiver_indices = np.meshgrid(np.arange(self.sources_amount), np.arange(self.receivers_amount), indexing='ij')
+        source_indices = source_indices.flatten()
+        receiver_indices = receiver_indices.flatten()
+
+        source_coords = source_positions[source_indices]  # Shape: [num_pairs, 2]
+        receiver_coords = receiver_positions[receiver_indices]  # Shape: [num_pairs, 2]
+        observed_tof = tof_to_receivers[source_indices, receiver_indices]  # Shape: [num_pairs]
+
+        x_s = torch.tensor(source_coords, dtype=torch.float32)  # Shape: [num_pairs, 2]
+        x_r = torch.tensor(receiver_coords, dtype=torch.float32)  # Shape: [num_pairs, 2]
+        x_o = torch.tensor(observed_tof, dtype=torch.float32) # Shape: [num_pairs]
+
+        # return  torch.cat([x_r, x_s], dim=1)
+        return {
+            'x_s': x_s,
+            'x_r': x_r,
+            'x_o': x_o
+        }
+
+    def _prepare_image(self, path, dimensions, min_value, max_value):
+        transform = transforms.Compose([
+            transforms.Resize(dimensions ),
+            transforms.Grayscale(num_output_channels=1),
+            transforms.ToTensor(),
+        ])
+        img  = Image.open(path)
+        image_tensor = transform(img)
+        physical_units = image_tensor * (max_value - min_value) + min_value
+        return  physical_units
+
+    def _build_files_index(self, modes):
         """
         Build a file index mapping tumor IDs to their anatomy, ToF, and ToF data files.
         """
@@ -78,78 +117,24 @@ class TofDataset(Dataset):
                     if match:
                         tumor_id = match.group(2)
                         if tumor_id not in self.file_index:
-                            self.file_index[tumor_id] = {'anatomy': None, 'tof': None, 'tof_data': None}
+                            self.file_index[tumor_id] = {'anatomy': None, 'tof': None, 'mat': None}
                         self.file_index[tumor_id][key] = os.path.join(base_path, file_name)
-            self._add_tof_data()
+            self._build_mat_files_index()
 
-    def _add_tof_data(self):
-        """
-        Add ToF data files to the file index.
-        """
+        index = {}
+        for i,v in enumerate(self.file_index.values()):
+            index[i] = v
+        self.file_index = index
+
+
+    def _build_mat_files_index(self):
         pattern = re.compile(r'ToF(.*)_(\d+)\.mat')
         for file_name in os.listdir(self.tof_path):
             match = pattern.match(file_name)
             if match:
                 tumor_id = match.group(2)
                 if tumor_id in self.file_index:
-                    self.file_index[tumor_id]['tof_data'] = os.path.join(self.tof_path, file_name)
+                    self.file_index[tumor_id]['mat'] = os.path.join(self.tof_path, file_name)
 
-    def _load_data(self, mode):
-        """
-        Load anatomy, ToF, and speed-of-sound data for the specified mode.
-        """
-        self.log_message(f"[dataset.py] Loading data for mode: {mode}...")
-        for tumor_id, paths in self.file_index.items():
-            if not all(paths.values()):
-                continue
-            anatomy_img = self._prepare_image_data(paths['anatomy'])
-            tof_img = self._prepare_image_data(paths['tof'])  # Fix applied here
-            sos_data = self._prepare_sos_data(paths['anatomy'])
-            mat_data = loadmat(paths['tof_data'])
-            tof_data = self._prepare_tof_data(mat_data)
-            self.tof_images.append(tof_img)
-            self.anatomy_images.append(anatomy_img)
-            self.sos_data.append(sos_data)
-            self.tof_data.append(tof_data)
-        log_message("[dataset.py] Data loading complete.")
 
-    def _prepare_image_data(self, path):
-        """
-        Read an image, convert it to grayscale, resize it, and return as a NumPy array.
-        """
-        # log_message(f"[dataset.py] Preparing image data for path: {path}")
-        # Ensure the image is loaded as grayscale
-        image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-        if image is None:
-            raise FileNotFoundError(f"Image file not found at path: {path}")
-        
-        # Resize the image to match grid_size
-        image_resized = cv2.resize(image, (self.grid_size, self.grid_size), interpolation=cv2.INTER_AREA)
-        return image_resized
 
-    def _prepare_sos_data(self, path):
-        """
-        Prepare speed-of-sound (SoS) data from an anatomy image.
-        """
-        image = Image.open(path).resize((self.grid_size, self.grid_size)).convert('L')
-        intensity_array = np.array(image, dtype=np.float32) / 255.0
-        sos_data = (self.min_sos + intensity_array * (self.max_sos - self.min_sos))
-        return sos_data.flatten()  # Ensure sos_values is a 1D array
-
-    def _prepare_tof_data(self, mat_data):
-        """
-        Prepare ToF data from the MATLAB file.
-        """
-        xs_sources = np.array(mat_data['xs_sources']).flatten()
-        ys_sources = np.array(mat_data['ys_sources']).flatten()
-        xs_receivers = np.array(mat_data['xs_receivers']).flatten()
-        ys_receivers = np.array(mat_data['ys_receivers']).flatten()
-        coords = np.column_stack([np.linspace(0, self.anatomy_width, self.grid_size).repeat(self.grid_size),
-                                  np.tile(np.linspace(0, self.anatomy_height, self.grid_size), self.grid_size)])
-        return {
-            'coords': coords,
-            'source_positions': np.column_stack([xs_sources, ys_sources]),
-            'source_values': np.zeros(len(xs_sources)),
-            'receiver_positions': np.column_stack([xs_receivers, ys_receivers]),
-            'receiver_values': np.array(mat_data['t_obs']).flatten()
-        }

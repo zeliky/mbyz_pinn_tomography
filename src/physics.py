@@ -6,74 +6,76 @@ from torch.autograd import grad
 
 
 class PINNLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, physics_loss_weight, L_x, L_y):
         super(PINNLoss, self).__init__()
+        self.physics_loss_weight = physics_loss_weight
+        self.mse_loss = nn.MSELoss()
+        self.L_x = L_x
+        self.L_y = L_y
 
-    def forward(self, c_pred, T_interp):
-        """
-        c_pred: Predicted speed of sound (128x128)
-        T_interp: Interpolated travel time (128x128)
-        """
-        # Compute gradients of T_interp (travel time)
-        grad_T_x = grad(T_interp, T_interp, grad_outputs=torch.ones_like(T_interp), create_graph=True)[0]
-        grad_T_y = grad(T_interp, T_interp, grad_outputs=torch.ones_like(T_interp), create_graph=True)[1]
+    def forward(self, model, tof_input, x_r, x_s, observed_tof, x_coords, x_s_grid):
+        # Forward pass through the model
+        c_map, T_pred = model(tof_input, x_r, x_s)
 
-        # Compute gradient magnitude |∇T|
-        grad_mag = torch.sqrt(grad_T_x ** 2 + grad_T_y ** 2 + 1e-8)
+        # Data loss (MSE between predicted travel times and observed ToF)
+        data_loss = self.mse_loss(T_pred.squeeze(), observed_tof.squeeze())
 
-        # Compute the residual of the eikonal equation
-        residual = grad_mag * c_pred - 1
+        # Physics loss (enforcing the eikonal equation)
+        physics_loss = self.compute_physics_loss(model.fcnn, x_coords, x_s_grid, c_map)
 
-        # Physics-informed loss
-        physics_loss = torch.mean(residual ** 2)
+        # Total loss
+        total_loss = data_loss + self.physics_loss_weight * physics_loss
+
+        return total_loss, data_loss.item(), physics_loss.item()
+
+    def compute_physics_loss(self, fcnn, x_coords, x_s, c_map):
+        batch_size, num_points, _ = x_coords.shape
+        x_coords_flat = x_coords.view(batch_size * num_points, 2).requires_grad_(True)
+        x_s_flat = x_s.view(batch_size * num_points, 2)
+
+        # Predict travel times at grid points
+        T_pred = fcnn(x_coords_flat, x_s_flat)
+
+        # Compute gradient of T with respect to x_coords
+        grad_T = torch.autograd.grad(
+            outputs=T_pred,
+            inputs=x_coords_flat,
+            grad_outputs=torch.ones_like(T_pred),
+            create_graph=True
+        )[0]
+
+        # Interpolate c(x) at x_coords
+        c_at_coords = interpolate_c(c_map, x_coords_flat, self.L_x, self.L_y)
+        grad_T_norm = torch.norm(grad_T, dim=1)
+        physics_loss = torch.mean((grad_T_norm - 1.0 / c_at_coords) ** 2)
         return physics_loss
 
 
-# Define the total loss
-class TotalLoss(nn.Module):
-    def __init__(self, lambda_data=1.0, lambda_physics=1.0):
-        super(TotalLoss, self).__init__()
-        self.lambda_data = lambda_data
-        self.lambda_physics = lambda_physics
-        self.mse_loss = nn.MSELoss()
-        self.pinn_loss = PINNLoss()
-
-    def forward(self, c_pred, c_true, T_interp):
-        data_loss = self.mse_loss(c_pred, c_true)  # Supervised MSE loss
-        physics_loss = self.pinn_loss(c_pred, T_interp)  # Physics-informed loss
-        total_loss = self.lambda_data * data_loss + self.lambda_physics * physics_loss
-        return total_loss
-
-
-
-
-
-def compute_eikonal_loss(coords, pinn_output, sos_values):
+def interpolate_c(c_map, spatial_coords, L_x, L_y):
     """
-    Computes the physics-informed loss using the Eikonal equation.
-
+    Interpolates the speed of sound map at the given spatial coordinates.
     Args:
-        coords (torch.Tensor): Coordinates where the Eikonal equation is evaluated.
-        pinn_output (torch.Tensor): Model output at the given coordinates.
-        sos_values (torch.Tensor): Speed of sound values at the coordinates.
-
+        c_map: Tensor of shape [batch_size, 1, H, W]
+        spatial_coords: Tensor of shape [batch_size * num_points, 2], in meters
+        L_x, L_y: Physical dimensions of the tissue in meters
     Returns:
-        torch.Tensor: Physics-informed loss based on the Eikonal equation.
+        c_at_coords: Tensor of shape [batch_size * num_points]
     """
-    coords.requires_grad = True
+    batch_size = c_map.shape[0]
+    H, W = c_map.shape[2], c_map.shape[3]
+    num_points_total = spatial_coords.shape[0]
 
-    gradients = torch.autograd.grad(
-        outputs=pinn_output,
-        inputs=coords,
-        grad_outputs=torch.ones_like(pinn_output),
-        create_graph=True
-    )[0]
+    # Normalize spatial coordinates to [-1, 1] for grid_sample
+    x_norm = (spatial_coords[:, 0] / L_x) * 2.0 - 1.0
+    y_norm = (spatial_coords[:, 1] / L_y) * 2.0 - 1.0
+    grid = torch.stack((x_norm, y_norm), dim=1)  # Shape: [batch_size * num_points, 2]
 
-    gradient_norm = torch.sqrt(torch.sum(gradients**2, dim=1))
-    sos_values = sos_values.view(-1)  # Flatten sos_values to 1D
+    # Reshape grid for grid_sample
+    grid = grid.view(batch_size, -1, 1, 2)  # Shape: [batch_size, num_points, 1, 2]
 
-    if gradient_norm.shape != sos_values.shape:
-        raise ValueError(f"Shape mismatch: gradient_norm {gradient_norm.shape} vs. sos_values {sos_values.shape}")
-
-    loss = torch.mean((gradient_norm - 1.0 / sos_values)**2)
-    return loss
+    # Interpolate c_map at grid points
+    c_at_coords = F.grid_sample(c_map, grid, mode='bilinear',
+                                align_corners=False)  # Shape: [batch_size, 1, num_points, 1]
+    c_at_coords = c_at_coords.squeeze(1).squeeze(2)  # Shape: [batch_size, num_points]
+    c_at_coords = c_at_coords.view(-1)  # Flatten to [batch_size * num_points]
+    return c_at_coords
