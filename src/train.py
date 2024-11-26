@@ -42,23 +42,18 @@ def train_model(dataset, num_epochs=100, batch_size=16, learning_rate=1e-4, phys
             batch_size = tof_input.shape[0]
             num_points = 1024  # Number of points for physics loss
 
-            # Ensure x_s has the correct shape
-            if x_s.dim() == 1:
-                x_s = x_s.unsqueeze(0)  # Shape: [1, 2]
-            x_s = x_s.expand(batch_size, -1)  # Shape: [batch_size, 2]
 
             x_coords = torch.rand((batch_size, num_points, 2), device=device)
             x_coords[:, :, 0] *= L_x  # Scale to physical units
             x_coords[:, :, 1] *= L_y  # Scale to physical units
             x_coords.requires_grad = True
 
-            x_s_grid = x_s.unsqueeze(1).repeat(1, num_points, 1)  # Shape: [batch_size, num_points, 2]
 
             optimizer.zero_grad()
 
             # Compute the loss
             total_loss, data_loss_value, physics_loss_value = loss_fn(
-                model, tof_input, x_r, x_s, observed_tof, x_coords, x_s_grid
+                model, tof_input, x_r, x_s, observed_tof, x_coords
             )
 
             # Backpropagation and optimization

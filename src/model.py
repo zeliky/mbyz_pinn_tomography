@@ -49,7 +49,7 @@ class TravelTimeFCNN(nn.Module):
         )
 
     def forward(self, x_r, x_s):
-        input_features = torch.cat([x_r, x_s], dim=1)  # Shape: [batch_size, 4]
+        input_features = torch.cat([x_r, x_s], dim=2)  # Shape: [batch_size, 4]
         T = self.fcnn(input_features)
         return T  # Predicted travel time in seconds ??
 
@@ -66,13 +66,8 @@ class PINNModel(nn.Module):
 
         # Predict travel time at receiver positions
         T_pred = self.fcnn(x_r, x_s)  # Shape: [batch_size, 1]
-
-        # Predict travel time at grid points for physics loss
-        batch_size, num_points, _ = x_coords.shape
-        x_coords_flat = x_coords.view(-1, 2)
-        x_s_grid_flat = x_s.unsqueeze(1).repeat(1, num_points, 1).view(-1, 2)
-        T_grid_flat = self.fcnn(x_coords_flat, x_s_grid_flat)  # Shape: [batch_size * num_points, 1]
-        T_grid = T_grid_flat.view(batch_size, num_points)  # Reshape back to [batch_size, num_points]
-
+        print(T_pred.shape)
+        T_grid = self.fcnn(x_coords, x_s)  # Shape: [batch_size * num_points, 1]
+        print(T_grid.shape)
         return c_map, T_pred, T_grid
 

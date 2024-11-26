@@ -17,7 +17,7 @@ class PINNLoss(nn.Module):
         self.L_x = L_x
         self.L_y = L_y
 
-    def forward(self, model, tof_input, x_r, x_s, observed_tof, x_coords, x_s_grid):
+    def forward(self, model, tof_input, x_r, x_s, observed_tof, x_coords):
         """
         Computes the total loss combining data loss and physics loss.
         Args:
@@ -27,7 +27,7 @@ class PINNLoss(nn.Module):
             x_s: Tensor of shape [batch_size, 2], source positions.
             observed_tof: Tensor of shape [batch_size], observed ToF measurements.
             x_coords: Tensor of shape [batch_size, num_points, 2], grid points for physics loss.
-            x_s_grid: Tensor of shape [batch_size, num_points, 2], source positions repeated.
+
         Returns:
             total_loss: Scalar tensor representing the total loss.
             data_loss_value: Scalar float, value of the data loss.
@@ -48,12 +48,11 @@ class PINNLoss(nn.Module):
         return total_loss, data_loss.item(), physics_loss.item()
 
     def compute_physics_loss(self, T_grid, x_coords, c_map):
-        batch_size, num_points = T_grid.shape
 
         # Flatten tensors for gradient computation
         T_grid_flat = T_grid.view(-1)  # Shape: [batch_size * num_points]
         x_coords_flat = x_coords.view(-1, 2)  # Shape: [batch_size * num_points, 2]
-        x_coords_flat.requires_grad = True
+
 
         # Compute gradient of T with respect to x_coords
         grad_T = torch.autograd.grad(
