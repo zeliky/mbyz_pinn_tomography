@@ -22,3 +22,7 @@ class ST_TerminalLogger:
 def log_message(message):
     logger = ST_TerminalLogger().get_logger()
     logger.print(message)
+
+def log_image(fig):
+    logger = ST_TerminalLogger().get_logger()
+    logger.show(fig)
