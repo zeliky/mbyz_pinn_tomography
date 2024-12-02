@@ -49,39 +49,37 @@ class TofDataset(Dataset):
     def __getitem__(self, idx):
         paths = self.file_index[idx]
         tof_data = self._prepare_mat_data(paths['mat'])
-        tof_input = self._prepare_image(paths['tof'],(self.sources_amount, self.receivers_amount), self.min_tof, self.max_tof)
-        sos_image = self._prepare_image(paths['anatomy'], (int(self.anatomy_width), int(self.anatomy_height)), self.min_sos, self.max_sos)
 
         return {
-            'tof_data': tof_data,
-            'tof_input': tof_input,
-            'sos_image':  sos_image
+            'x_s': tof_data['x_s'],
+            'x_r': tof_data['x_r'],
+            'x_o': tof_data['x_o'],
         }
 
     def _prepare_mat_data(self, path):
         mat_data = loadmat(path)
 
-        xs_sources = np.array(mat_data['xs_sources']).flatten()
-        ys_sources = np.array(mat_data['ys_sources']).flatten()
+        xs_sources = np.array(mat_data['xs_sources']/self.anatomy_width).flatten()
+        ys_sources = np.array(mat_data['ys_sources']/self.anatomy_height).flatten()
         source_positions = np.column_stack([xs_sources, ys_sources])
 
-        xs_receivers = np.array(mat_data['xs_receivers']).flatten()
-        ys_receivers = np.array(mat_data['ys_receivers']).flatten()
+        xs_receivers = np.array(mat_data['xs_receivers']/self.anatomy_width).flatten()
+        ys_receivers = np.array(mat_data['ys_receivers']/self.anatomy_height).flatten()
         receiver_positions = np.column_stack([xs_receivers, ys_receivers])
 
-        tof_to_receivers = np.array(mat_data['t_obs'])
+        tof_to_receivers = np.array(mat_data['t_obs']/self.max_tof)
 
         source_indices, receiver_indices = np.meshgrid(np.arange(self.sources_amount), np.arange(self.receivers_amount), indexing='ij')
         source_indices = source_indices.flatten()
         receiver_indices = receiver_indices.flatten()
 
-        source_coords = source_positions[source_indices]  # Shape: [num_pairs, 2]
-        receiver_coords = receiver_positions[receiver_indices]  # Shape: [num_pairs, 2]
-        observed_tof = tof_to_receivers[source_indices, receiver_indices]  # Shape: [num_pairs]
+        x_s_pairs = source_positions[source_indices]  # Shape: [num_pairs, 2]
+        x_r_pairs = receiver_positions[receiver_indices]  # Shape: [num_pairs, 2]
+        x_o_pairs = tof_to_receivers[source_indices, receiver_indices]  # Shape: [num_pairs]
 
-        x_s = torch.tensor(source_coords, dtype=torch.float32)  # Shape: [num_pairs, 2]
-        x_r = torch.tensor(receiver_coords, dtype=torch.float32)  # Shape: [num_pairs, 2]
-        x_o = torch.tensor(observed_tof, dtype=torch.float32) # Shape: [num_pairs]
+        x_s = torch.tensor(x_s_pairs, dtype=torch.float32)  # Shape: [num_pairs, 2]
+        x_r = torch.tensor(x_r_pairs, dtype=torch.float32)  # Shape: [num_pairs, 2]
+        x_o = torch.tensor(x_o_pairs, dtype=torch.float32) # Shape: [num_pairs]
 
         # return  torch.cat([x_r, x_s], dim=1)
         return {
@@ -138,3 +136,14 @@ class TofDataset(Dataset):
 
 
 
+    def DEP__getitem__(self, idx):
+        paths = self.file_index[idx]
+        tof_data = self._prepare_mat_data(paths['mat'])
+        tof_input = self._prepare_image(paths['tof'],(self.sources_amount, self.receivers_amount), self.min_tof, self.max_tof)
+        sos_image = self._prepare_image(paths['anatomy'], (int(self.anatomy_width), int(self.anatomy_height)), self.min_sos, self.max_sos)
+
+        return {
+            'tof_data': tof_data,
+            'tof_input': tof_input,
+            'sos_image':  sos_image
+        }

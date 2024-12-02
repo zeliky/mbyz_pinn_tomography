@@ -55,54 +55,16 @@ model_u = TravelTimeNN().to(device)
 # Define optimizer
 optimizer = optim.Adam(list(model_u.parameters()) + list(model_c.parameters()), lr=1e-3)
 
-# Define the DataLoader
-# Assuming you have a dataset that provides batches with keys: 'x_r', 'x_s', 'x_o'
 
-# Placeholder for DataLoader
-# Replace 'YourDataset' with your actual dataset class
-# data_loader = DataLoader(YourDataset, batch_size=batch_size, shuffle=True)
-
-# For illustration, let's create a dummy DataLoader
-class TOFDataset(torch.utils.data.Dataset):
-    def __init__(self, x_s_all, x_r_all, x_o_all):
-        self.x_s_all = x_s_all
-        self.x_r_all = x_r_all
-        self.x_o_all = x_o_all
-
-    def __len__(self):
-        return len(self.x_o_all)
-
-    def __getitem__(self, idx):
-        return {
-            'x_s': self.x_s_all[idx],
-            'x_r': self.x_r_all[idx],
-            'x_o': self.x_o_all[idx]
-        }
 
 # Assuming you have arrays x_s_all, x_r_all, x_o_all containing all your data
 # For demonstration, let's create dummy data
 num_pairs = 1000  # Total number of source-receiver pairs
-x_s_all = torch.rand(num_pairs, 2) * (x_max - x_min) + x_min  # Sources
-x_r_all = torch.rand(num_pairs, 2) * (y_max - y_min) + y_min  # Receivers
-# Simulate observed times of flight (using a true_c function)
-def true_c_func(x, y):
-    return 1.0 + 0.5 * x + 0.3 * y
-def generate_tof(x_s_all, x_r_all, true_c_func):
-    times = []
-    for s, r in zip(x_s_all, x_r_all):
-        x_s, y_s = s
-        x_r, y_r = r
-        distance = torch.sqrt((x_r - x_s)**2 + (y_r - y_s)**2)
-        avg_speed = true_c_func((x_s + x_r)/2, (y_s + y_r)/2)
-        time = distance / avg_speed
-        times.append(time)
-    return torch.tensor(times)
 
-x_o_all = generate_tof(x_s_all, x_r_all, true_c_func)
 
 
 # Create dataset and DataLoader
-dataset = TOFDataset(x_s_all, x_r_all, x_o_all)
+dataset = TofDataset(['train', 'validation'])
 batch_size = 64
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -120,7 +82,6 @@ for epoch in range(num_epochs):
         x_s = batch['x_s'].to(device)  # Shape: [batch_size, 2]
         x_r = batch['x_r'].to(device)  # Shape: [batch_size, 2]
         observed_tof = batch['x_o'].to(device).unsqueeze(1)  # Shape: [batch_size, 1]
-        b_size,_= batch['x_s'].shape
         optimizer.zero_grad()
 
         # Data loss: Predict times of flight and compare with observed
