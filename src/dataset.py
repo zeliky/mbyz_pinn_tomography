@@ -37,51 +37,85 @@ class TofDataset(Dataset):
         }
         self.tof_path = app_settings.tof_path
 
+        self.x_s_list = []
+        self.x_r_list = []
+        self.x_o_list = []
+
+        self._load_files_data()
+
+    def _load_files_data(self):
         self._build_files_index(self.modes)
+        for idx in self.file_index:
+            paths = self.file_index[idx]
+            tof_data = self._prepare_mat_data(paths['mat'])
+            self.x_s_list.append(tof_data['x_s'])  # Shape: [num_pairs, 2]
+            self.x_r_list.append(tof_data['x_r'])  # Shape: [num_pairs, 2]
+            self.x_o_list.append(tof_data['x_o'])  # Shape: [num_pairs]
+
+        # Concatenate data from all files
+        self.x_s = torch.cat(self.x_s_list, dim=0)  # Shape: [total_num_pairs, 2]
+        self.x_r = torch.cat(self.x_r_list, dim=0)  # Shape: [total_num_pairs, 2]
+        self.x_o = torch.cat(self.x_o_list, dim=0)  # Shape: [total_num_pairs]
+
+
 
     @staticmethod
     def load_dataset(source_file):
         with open(source_file, 'rb') as file:
             return pickle.load(file)
+
     def __len__(self):
-        return len(self.file_index)
+        return self.x_o.shape[0]
+
+
 
     def __getitem__(self, idx):
-        paths = self.file_index[idx]
-        tof_data = self._prepare_mat_data(paths['mat'])
 
         return {
-            'x_s': tof_data['x_s'],
-            'x_r': tof_data['x_r'],
-            'x_o': tof_data['x_o'],
+            'x_s': self.x_s[idx],  # Shape: [2]
+            'x_r': self.x_r[idx],  # Shape: [2]
+            'x_o': self.x_o[idx]   # Scalar
+        }
+
+    def get_full_data(self, idx):
+        return {
+            'x_s': self.x_s_list[idx],
+            'x_r': self.x_r_list[idx],
+            'x_o': self.x_o_list[idx]
         }
 
     def _prepare_mat_data(self, path):
+        log_message(f'loading mat file {path}')
         mat_data = loadmat(path)
 
-        xs_sources = np.array(mat_data['xs_sources']/self.anatomy_width).flatten()
-        ys_sources = np.array(mat_data['ys_sources']/self.anatomy_height).flatten()
-        source_positions = np.column_stack([xs_sources, ys_sources])
+        xs_sources = np.array(mat_data['xs_sources'] / self.anatomy_width).flatten()
+        ys_sources = np.array(mat_data['ys_sources'] / self.anatomy_height).flatten()
+        source_positions = np.column_stack([xs_sources, ys_sources])  # Shape: [num_sources, 2]
 
-        xs_receivers = np.array(mat_data['xs_receivers']/self.anatomy_width).flatten()
-        ys_receivers = np.array(mat_data['ys_receivers']/self.anatomy_height).flatten()
-        receiver_positions = np.column_stack([xs_receivers, ys_receivers])
+        xs_receivers = np.array(mat_data['xs_receivers'] / self.anatomy_width).flatten()
+        ys_receivers = np.array(mat_data['ys_receivers'] / self.anatomy_height).flatten()
+        receiver_positions = np.column_stack([xs_receivers, ys_receivers])  # Shape: [num_receivers, 2]
 
-        tof_to_receivers = np.array(mat_data['t_obs']/self.max_tof)
+        tof_to_receivers = np.array(mat_data['t_obs'] / self.max_tof)  # Shape: [num_sources, num_receivers]
 
-        source_indices, receiver_indices = np.meshgrid(np.arange(self.sources_amount), np.arange(self.receivers_amount), indexing='ij')
-        source_indices = source_indices.flatten()
-        receiver_indices = receiver_indices.flatten()
+        # Create all combinations of sources and receivers
+        source_indices, receiver_indices = np.meshgrid(
+            np.arange(self.sources_amount),
+            np.arange(self.receivers_amount),
+            indexing='ij'
+        )
+        source_indices = source_indices.flatten()  # Shape: [num_pairs]
+        receiver_indices = receiver_indices.flatten()  # Shape: [num_pairs]
 
         x_s_pairs = source_positions[source_indices]  # Shape: [num_pairs, 2]
         x_r_pairs = receiver_positions[receiver_indices]  # Shape: [num_pairs, 2]
         x_o_pairs = tof_to_receivers[source_indices, receiver_indices]  # Shape: [num_pairs]
 
+        # Convert to tensors
         x_s = torch.tensor(x_s_pairs, dtype=torch.float32)  # Shape: [num_pairs, 2]
         x_r = torch.tensor(x_r_pairs, dtype=torch.float32)  # Shape: [num_pairs, 2]
-        x_o = torch.tensor(x_o_pairs, dtype=torch.float32) # Shape: [num_pairs]
+        x_o = torch.tensor(x_o_pairs, dtype=torch.float32)  # Shape: [num_pairs]
 
-        # return  torch.cat([x_r, x_s], dim=1)
         return {
             'x_s': x_s,
             'x_r': x_r,
