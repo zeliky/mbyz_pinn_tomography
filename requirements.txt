@@ -7,4 +7,4 @@ torch
 torchvision
 pandas
 mpld3
-
+tqdm
