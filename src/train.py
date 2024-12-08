@@ -32,6 +32,8 @@ class PINNTrainer:
 
         model = self.model.to(self.device)
 
+        #coords= self.get_domain_coords()
+
         for epoch in range(self.epochs):
             model.train()
             running_loss = 0.0
@@ -45,43 +47,49 @@ class PINNTrainer:
                     x_s = batch['x_s'].to(self.device)          # Source positions [num_pairs,2]
                     x_r = batch['x_r'].to(self.device)          # Receiver positions [num_pairs,2]
                     x_o = batch['x_o'].to(self.device)          # Measured travel times for each pair
+                    source_map = inputs[:, 1:2, :, :]
+                    receiver_map = inputs[:, 2:3, :, :]
 
-                    c_pred = model(inputs)
+                    t_pred, c_pred = model(inputs)
 
-                    # Compute PDE residual loss
-                    pde_residual = model.compute_pde_residual(tof, c_pred)
+                    #  compute physics loss tof/sos
+                    pde_residual = model.compute_pde_residual(t_pred, c_pred)
                     pde_loss = torch.mean(pde_residual**2)
 
-                    # MSE loss between predicted SoS and ground truth SoS
-                    pred_image = c_pred.squeeze(0).squeeze(0)
-                    org_image = anatomy.squeeze(0).squeeze(0)
-                    mse_loss = mse_criterion(pred_image, org_image)
+                    # loss between predicted SoS and anatomy sos
+                    #pred_image = c_pred.squeeze(0).squeeze(0)
+                    #org_image = anatomy.squeeze(0).squeeze(0)
+                    mse_loss = mse_criterion(c_pred, anatomy)
 
                     # Boundary conditions loss:
-                    B, _, H, W = tof.shape
-
-                    T_s = _bilinear_interpolate(tof, x_s)  # [B, num_pairs, 1]
-                    T_r = _bilinear_interpolate(tof, x_r)  # [B, num_pairs, 1]
+                    B, _, H, W = inputs.shape
+                    T_s = t_pred[source_map == 1]
+                    #T_r = t_pred[receiver_map == 1]
 
                     # T_s should be ~0
                     bc_loss_s = mse_criterion(T_s, torch.zeros_like(T_s))
 
                     # T_r should match x_o
-                    x_o = x_o.unsqueeze(-1) # [B, num_pairs, 1]
-                    bc_loss_r = mse_criterion(T_r, x_o)
-                    bc_loss = bc_loss_s + bc_loss_r
+                    #print(f"T_s:{T_s.shape} ,T_r:{T_r.shape}, x_o:{x_o.shape}")
+                    #x_o = x_o.unsqueeze(-1) # [B, num_pairs, 1]
 
+                    #bc_loss_r = mse_criterion(T_r, x_o)
+                    #bc_loss = bc_loss_s + bc_loss_r
+                    bc_loss = bc_loss_s
 
-
+                    #print(f"s:{bc_loss_s}, r:{bc_loss_r}")
                     # Total loss
                     loss = mse_loss + self.pde_weight * pde_loss + self.bc_weight * bc_loss
-                    #print(f"loss:{mse_loss} , pde_loss:{pde_loss}, bc_loss:{bc_loss}")
+
+                    #print(f"mse_loss:{mse_loss} , pde_loss:{pde_loss}, bc_loss:{bc_loss}")
                     optimizer.zero_grad( )
                     loss.backward()
                     optimizer.step()
                     running_loss += loss.item()
                     pbar.update(1)
 
+            val_loss = 0.0
+            """
             # Validation
             self.model.eval()
             val_loss = 0.0
@@ -90,20 +98,22 @@ class PINNTrainer:
                     pbar.set_description("Validation ")
                     for batch in val_loader:
                         inputs = batch['inputs'].to(self.device)
-                        tof = batch['tof'].to(self.device)
                         anatomy = batch['anatomy'].to(self.device)
                         x_s = batch['x_s'].to(self.device)
                         x_r = batch['x_r'].to(self.device)
                         x_o = batch['x_o'].to(self.device)
 
-                        c_pred = self.model(inputs)
+                        t_pred, c_pred = self.model(inputs)
 
-                        pde_residual = self.model.compute_pde_residual(tof, c_pred)
+                        pde_residual = self.model.compute_pde_residual(t_pred, c_pred)
                         pde_loss = torch.mean(pde_residual**2)
-                        mse_loss = mse_criterion(c_pred, anatomy)
 
-                        T_s = _bilinear_interpolate(tof, x_s)
-                        T_r = _bilinear_interpolate(tof, x_r)
+                        pred_image = c_pred.squeeze(0).squeeze(0)
+                        org_image = anatomy.squeeze(0).squeeze(0)
+                        mse_loss = mse_criterion(pred_image, org_image)
+
+                        T_s = _bilinear_interpolate(t_pred, _to_pixel_coordinates(x_s,H,W))
+                        T_r = _bilinear_interpolate(t_pred, _to_pixel_coordinates(x_r,H,W))
                         bc_loss_s = mse_criterion(T_s, torch.zeros_like(T_s))
                         x_o = x_o.unsqueeze(-1)
                         bc_loss_r = mse_criterion(T_r, x_o)
@@ -112,9 +122,19 @@ class PINNTrainer:
                         loss = mse_loss + self.pde_weight * pde_loss + self.bc_weight * bc_loss
                         val_loss += loss.item()
                         pbar.update(1)
-
+            """
             log_message(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {running_loss/len(train_loader):.4f}, Val Loss: {val_loss/len(val_loader):.4f}")
             self.save_state(model, optimizer, val_loss, epoch)
+
+    def get_domain_coords(self):
+        x_min, x_max = 0.0, 1.0
+        y_min, y_max = 0.0, 1.0
+        num_collocation = 50 * 50
+        coords = torch.rand(num_collocation, 2, device=self.device)
+        coords[:, 0] = coords[:, 0] * (x_max - x_min) + x_min
+        coords[:, 1] = coords[:, 1] * (y_max - y_min) + y_min
+        coords.requires_grad_(True)
+        return coords
 
     def load_checkpoint(self, checkpoint_path):
         checkpoint_path = f"{app_settings.output_folder}/{checkpoint_path}"
@@ -142,8 +162,8 @@ class PINNTrainer:
                 inputs = batch['inputs'].to(self.device)
                 anatomy = batch['anatomy'].cpu().squeeze(0).squeeze(0)  # [1,H,W] -> [H,W]
 
-                c_pred = self.model(inputs).cpu().squeeze(0).squeeze(0)  # [1,H,W] -> [H,W]
-
+                t, c = self.model(inputs)
+                c_pred= c.cpu().squeeze(0).squeeze(0)  # [1,H,W] -> [H,W]
                 # Convert to numpy
                 anatomy_np = anatomy.numpy()
                 c_pred_np = c_pred.numpy()
@@ -196,3 +216,10 @@ def _bilinear_interpolate(tensor, coords):
 
     return sampled
 
+
+def _to_pixel_coordinates(src, W, H):
+    norm_pixels = src.clone()
+    norm_pixels[:, 0] = norm_pixels[:, 0] * (W - 1)
+    norm_pixels[:, 1] = norm_pixels[:, 1] * (H - 1)
+
+    return norm_pixels

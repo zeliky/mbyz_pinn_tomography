@@ -15,7 +15,8 @@ if __name__ == "__main__":
     trainer = PINNTrainer(model=PhysicsInformedUNet(),
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
-                          epochs=epochs
+                          epochs=epochs,
+                          lr=1e-3
     )
     #trainer.load_checkpoint('pinn_tof-sos_model.2024_12_07_23_19_18_097306-2.pth')
     trainer.train_model()

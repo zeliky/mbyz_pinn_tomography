@@ -57,7 +57,7 @@ class OutConv(nn.Module):
 # accepts 4 input channels:
 # [anatomy, tof, source_map, receiver_map]
 class PhysicsInformedUNet(nn.Module):
-    def __init__(self, n_channels=3, n_classes=1):
+    def __init__(self, n_channels=3, n_classes=2):
         super(PhysicsInformedUNet, self).__init__()
         self.inc = DoubleConv(n_channels, 64)
         self.down1 = Down(64, 128)
@@ -81,19 +81,22 @@ class PhysicsInformedUNet(nn.Module):
         x = self.up2(x, x3)
         x = self.up3(x, x2)
         x = self.up4(x, x1)
-        logits = self.outc(x)
-        return logits
+        out = self.outc(x)
 
-    def compute_pde_residual(self, tof, c_pred):
-        # tof: measured travel time field [B,1,H,W]
-        # c_pred: predicted speed of sound [B,1,H,W]
-        grad_x = torch.diff(tof, dim=3, n=1)
-        grad_y = torch.diff(tof, dim=2, n=1)
+        T_pred = torch.sigmoid(out[:, 0:1, :, :])  # [B,1,H,W]
+        c_pred = torch.sigmoid(out[:, 1:2, :, :])  # [B,1,H,W]
 
-        grad_x = F.pad(grad_x, (0,1,0,0), mode='replicate')
-        grad_y = F.pad(grad_y, (0,0,0,1), mode='replicate')
+        return T_pred, c_pred
 
-        grad_sq = grad_x**2 + grad_y**2
-        c_sq_inv = 1.0/(c_pred**2 + 1e-12)
+    def compute_pde_residual(self, T_pred, c_pred):
+        grad_x = torch.diff(T_pred, dim=3, n=1)
+        grad_y = torch.diff(T_pred, dim=2, n=1)
+
+        grad_x = F.pad(grad_x, (0, 1, 0, 0), mode='replicate')
+        grad_y = F.pad(grad_y, (0, 0, 0, 1), mode='replicate')
+
+        grad_sq = grad_x ** 2 + grad_y ** 2
+
+        c_sq_inv = 1.0 / (c_pred ** 2 + 1e-8)
         pde_residual = grad_sq - c_sq_inv
         return pde_residual
