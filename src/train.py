@@ -47,8 +47,6 @@ class PINNTrainer:
                     x_s = batch['x_s'].to(self.device)          # Source positions [num_pairs,2]
                     x_r = batch['x_r'].to(self.device)          # Receiver positions [num_pairs,2]
                     x_o = batch['x_o'].to(self.device)          # Measured travel times for each pair
-                    source_map = inputs[:, 1:2, :, :]
-                    receiver_map = inputs[:, 2:3, :, :]
 
                     t_pred, c_pred = model(inputs)
 
@@ -57,27 +55,25 @@ class PINNTrainer:
                     pde_loss = torch.mean(pde_residual**2)
 
                     # loss between predicted SoS and anatomy sos
-                    #pred_image = c_pred.squeeze(0).squeeze(0)
-                    #org_image = anatomy.squeeze(0).squeeze(0)
-                    mse_loss = mse_criterion(c_pred, anatomy)
+                    pred_image = c_pred.squeeze(0).squeeze(0)
+                    org_image = anatomy.squeeze(0).squeeze(0)
+                    mse_loss = mse_criterion(pred_image, org_image)
 
                     # Boundary conditions loss:
+
                     B, _, H, W = inputs.shape
-                    T_s = t_pred[source_map == 1]
-                    #T_r = t_pred[receiver_map == 1]
+
+                    T_s = _bilinear_interpolate(t_pred,  _to_pixel_coordinates(x_s,H,W))  # [B, num_pairs, 1]
+                    T_r = _bilinear_interpolate(t_pred,  _to_pixel_coordinates(x_r,H,W))  # [B, num_pairs, 1]
 
                     # T_s should be ~0
                     bc_loss_s = mse_criterion(T_s, torch.zeros_like(T_s))
 
                     # T_r should match x_o
-                    #print(f"T_s:{T_s.shape} ,T_r:{T_r.shape}, x_o:{x_o.shape}")
-                    #x_o = x_o.unsqueeze(-1) # [B, num_pairs, 1]
+                    x_o = x_o.unsqueeze(-1) # [B, num_pairs, 1]
+                    bc_loss_r = mse_criterion(T_r, x_o)
+                    bc_loss = bc_loss_s + bc_loss_r
 
-                    #bc_loss_r = mse_criterion(T_r, x_o)
-                    #bc_loss = bc_loss_s + bc_loss_r
-                    bc_loss = bc_loss_s
-
-                    #print(f"s:{bc_loss_s}, r:{bc_loss_r}")
                     # Total loss
                     loss = mse_loss + self.pde_weight * pde_loss + self.bc_weight * bc_loss
 
@@ -88,8 +84,6 @@ class PINNTrainer:
                     running_loss += loss.item()
                     pbar.update(1)
 
-            val_loss = 0.0
-            """
             # Validation
             self.model.eval()
             val_loss = 0.0
@@ -122,7 +116,7 @@ class PINNTrainer:
                         loss = mse_loss + self.pde_weight * pde_loss + self.bc_weight * bc_loss
                         val_loss += loss.item()
                         pbar.update(1)
-            """
+
             log_message(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {running_loss/len(train_loader):.4f}, Val Loss: {val_loss/len(val_loader):.4f}")
             self.save_state(model, optimizer, val_loss, epoch)
 

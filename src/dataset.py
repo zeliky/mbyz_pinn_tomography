@@ -99,7 +99,7 @@ class TofDataset(Dataset):
         # tof_data: [1,H,W]
         # source_map: [1,H,W]
         # receiver_map: [1,H,W]
-        inputs = torch.cat([tof_data, source_map, receiver_map], dim=0)  # [3,H,W]
+        inputs = torch.cat([anatomy_data, tof_data, source_map, receiver_map], dim=0)  # [3,H,W]
 
         return {
             'inputs': inputs,

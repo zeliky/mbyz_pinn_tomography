@@ -57,7 +57,7 @@ class OutConv(nn.Module):
 # accepts 4 input channels:
 # [anatomy, tof, source_map, receiver_map]
 class PhysicsInformedUNet(nn.Module):
-    def __init__(self, n_channels=3, n_classes=2):
+    def __init__(self, n_channels=4, n_classes=2):
         super(PhysicsInformedUNet, self).__init__()
         self.inc = DoubleConv(n_channels, 64)
         self.down1 = Down(64, 128)

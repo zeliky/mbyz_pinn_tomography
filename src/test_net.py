@@ -60,7 +60,7 @@ def generate_measured_times(source_points, receiver_points, true_c_func):
 measured_times = generate_measured_times(source_points, receiver_points, true_c_func)
 
 # Create collocation points in the domain for PDE residual computation
-num_points = 10000
+num_points = 10
 xy_collocation = torch.rand(num_points, 2, device=device)
 xy_collocation[:, 0] = xy_collocation[:, 0] * (x_max - x_min) + x_min
 xy_collocation[:, 1] = xy_collocation[:, 1] * (y_max - y_min) + y_min
