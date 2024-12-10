@@ -4,7 +4,7 @@ from Terminal_and_HTML_Code.Terminal_and_HTML import terminal_html
 from report_dataset_info import report_dataset_info
 from dataset import TofDataset
 from train import PINNTrainer
-from model_pinn_unet import PhysicsInformedUNet
+from model_tof_sos_cnn import ToFPredictor
 import os
 if __name__ == "__main__":
     # define the terminal_html folder and initiate the corresponding class 'terminal_html'
@@ -12,7 +12,7 @@ if __name__ == "__main__":
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     log_message("[main.py] Starting PINN training pipeline...")
     epochs = 50
-    trainer = PINNTrainer(model=PhysicsInformedUNet(),
+    trainer = PINNTrainer(model=ToFPredictor(),
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,

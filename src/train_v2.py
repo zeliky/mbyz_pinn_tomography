@@ -4,7 +4,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from logger import log_message, log_image
-from physics import compute_eikonal_loss
 from settings import app_settings
 from datetime import datetime
 from tqdm import tqdm
@@ -21,7 +20,6 @@ class PINNTrainer:
         self.epochs = kwargs.get('epochs', 10)
         self.batch_size = kwargs.get('batch_size', 1)
         self.lr = kwargs.get('lr',  1e-3)
-        self.data_weight = kwargs.get('data_weight',  1.0)
         self.pde_weight = kwargs.get('pde_weight',  1.0)
         self.bc_weight = kwargs.get('bc_weight',  1.0)
 
@@ -30,47 +28,61 @@ class PINNTrainer:
         val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False)
 
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        mse_criterion = nn.MSELoss()
 
         model = self.model.to(self.device)
+
+        #coords= self.get_domain_coords()
 
         for epoch in range(self.epochs):
             model.train()
             running_loss = 0.0
             with tqdm(total=train_loader.__len__()) as pbar:
-                pbar.set_description("Training" )
-                optimizer.zero_grad()
-
+                pbar.set_description("Training " )
                 for batch in train_loader:
-                    input_tof_tensor = batch['tof_inputs'].to(self.device)
-                    observed_tof = batch['tof_inputs'].clone().to(self.device)
-                    known_indices = batch['known_indices'].to(self.device)
-                    boundary_indices = batch['boundary_indices'].to(self.device)
-                    sos_map = batch['anatomy'].to(self.device) # only one anatomy image
-                    predicted_tof = model(input_tof_tensor)
+                    # batch contains: 'anatomy', 'tof', 'x_s', 'x_r', 'x_o'
+                    inputs = batch['inputs'].to(self.device)  # Ground truth SoS
+                    tof = batch['tof'].to(self.device)          # Measured TOF field
+                    anatomy = batch['anatomy'].to(self.device)  # Original anatomy SOS
+                    x_s = batch['x_s'].to(self.device)          # Source positions [num_pairs,2]
+                    x_r = batch['x_r'].to(self.device)          # Receiver positions [num_pairs,2]
+                    x_o = batch['x_o'].to(self.device)          # Measured travel times for each pair
 
-                    predicted_known = predicted_tof.masked_select(known_indices)
-                    observed_known = observed_tof.masked_select(known_indices)
-                    predicted_boundary = predicted_tof.masked_select(boundary_indices)
-                    observed_boundary = observed_tof.masked_select(boundary_indices)
+                    t_pred, c_pred = model(inputs)
 
-                    data_loss = F.mse_loss(predicted_known, observed_known)
-                    boundary_loss = F.mse_loss(predicted_boundary, observed_boundary)
+                    #  compute physics loss tof/sos
+                    pde_residual = model.compute_pde_residual(t_pred, c_pred)
+                    pde_loss = torch.mean(pde_residual**2)
 
-                    eikonal_loss = compute_eikonal_loss(predicted_tof.squeeze(), sos_map.squeeze())
+                    # loss between predicted SoS and anatomy sos
+                    pred_image = c_pred.squeeze(0).squeeze(0)
+                    org_image = anatomy.squeeze(0).squeeze(0)
+                    mse_loss = mse_criterion(pred_image, org_image)
 
-                    print(f"mse_loss:{data_loss} , pde_loss:{eikonal_loss}  bc_loss:{boundary_loss}")
+                    # Boundary conditions loss:
 
-                    total_loss = self.data_weight * data_loss + self.pde_weight * eikonal_loss
+                    B, _, H, W = inputs.shape
 
-                    # Backward pass and optimization
-                    total_loss.backward()
+                    T_s = _bilinear_interpolate(t_pred,  _to_pixel_coordinates(x_s,H,W))  # [B, num_pairs, 1]
+                    T_r = _bilinear_interpolate(t_pred,  _to_pixel_coordinates(x_r,H,W))  # [B, num_pairs, 1]
 
-                    # Gradient Clipping to prevent exploding gradients
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    # T_s should be ~0
+                    bc_loss_s = mse_criterion(T_s, torch.zeros_like(T_s))
+
+                    # T_r should match x_o
+                    x_o = x_o.unsqueeze(-1) # [B, num_pairs, 1]
+                    bc_loss_r = mse_criterion(T_r, x_o)
+                    bc_loss = bc_loss_s + bc_loss_r
+
+                    # Total loss
+                    loss = mse_loss + self.pde_weight * pde_loss + self.bc_weight * bc_loss
+
+                    #print(f"mse_loss:{mse_loss} , pde_loss:{pde_loss}, bc_loss:{bc_loss}")
+                    optimizer.zero_grad( )
+                    loss.backward()
                     optimizer.step()
+                    running_loss += loss.item()
                     pbar.update(1)
-            print(f"Epoch {epoch}, Loss: {total_loss.item()}")
-
 
             # Validation
             self.model.eval()
@@ -79,17 +91,30 @@ class PINNTrainer:
                 with tqdm(total=val_loader.__len__()) as pbar:
                     pbar.set_description("Validation ")
                     for batch in val_loader:
-                        input_tof_tensor = batch['tof_inputs'].to(self.device)
-                        observed_tof = batch['tof_inputs'].copy().to(self.device)
-                        known_indices = batch['known_indices'].to(self.device)
-                        boundary_indices = batch['boundary_indices'].to(self.device)
-                        sos_map = batch['anatomy'].to(self.device)
-                        predicted_tof = model(input_tof_tensor)
-                        data_loss = F.mse_loss(predicted_tof[:, known_indices], observed_tof[:, known_indices])
-                        boundary_loss = F.mse_loss(predicted_tof[:, boundary_indices],
-                                                   input_tof_tensor[:, boundary_indices])
-                        eikonal_loss = compute_eikonal_loss(predicted_tof, sos_map)
-                        val_loss = alpha * data_loss + self.pde_weight * eikonal_loss + self.bc_weight * boundary_loss
+                        inputs = batch['inputs'].to(self.device)
+                        anatomy = batch['anatomy'].to(self.device)
+                        x_s = batch['x_s'].to(self.device)
+                        x_r = batch['x_r'].to(self.device)
+                        x_o = batch['x_o'].to(self.device)
+
+                        t_pred, c_pred = self.model(inputs)
+
+                        pde_residual = self.model.compute_pde_residual(t_pred, c_pred)
+                        pde_loss = torch.mean(pde_residual**2)
+
+                        pred_image = c_pred.squeeze(0).squeeze(0)
+                        org_image = anatomy.squeeze(0).squeeze(0)
+                        mse_loss = mse_criterion(pred_image, org_image)
+
+                        T_s = _bilinear_interpolate(t_pred, _to_pixel_coordinates(x_s,H,W))
+                        T_r = _bilinear_interpolate(t_pred, _to_pixel_coordinates(x_r,H,W))
+                        bc_loss_s = mse_criterion(T_s, torch.zeros_like(T_s))
+                        x_o = x_o.unsqueeze(-1)
+                        bc_loss_r = mse_criterion(T_r, x_o)
+                        bc_loss = bc_loss_s + bc_loss_r
+
+                        loss = mse_loss + self.pde_weight * pde_loss + self.bc_weight * bc_loss
+                        val_loss += loss.item()
                         pbar.update(1)
 
             log_message(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {running_loss/len(train_loader):.4f}, Val Loss: {val_loss/len(val_loader):.4f}")

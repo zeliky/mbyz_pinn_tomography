@@ -1,95 +1,110 @@
 import torch
-
-import torch
-import torch.nn as nn
-from torch.autograd import grad
-
-
-import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
-class PINNLoss(nn.Module):
-    def __init__(self, physics_loss_weight, L_x, L_y):
-        super(PINNLoss, self).__init__()
-        self.physics_loss_weight = physics_loss_weight
-        self.mse_loss = nn.MSELoss()
-        self.L_x = L_x
-        self.L_y = L_y
-
-    def forward(self, model, tof_input, x_r, x_s, observed_tof, x_coords):
-        """
-        Computes the total loss combining data loss and physics loss.
-        Args:
-            model: The PINNModel instance.
-            tof_input: Tensor of shape [batch_size, 1, H_in, W_in], input ToF images.
-            x_r: Tensor of shape [batch_size, 2], receiver positions.
-            x_s: Tensor of shape [batch_size, 2], source positions.
-            observed_tof: Tensor of shape [batch_size], observed ToF measurements.
-            x_coords: Tensor of shape [batch_size, num_points, 2], grid points for physics loss.
-
-        Returns:
-            total_loss: Scalar tensor representing the total loss.
-            data_loss_value: Scalar float, value of the data loss.
-            physics_loss_value: Scalar float, value of the physics loss.
-        """
-        # Forward pass through the model
-        c_map, T_pred, T_grid = model(tof_input, x_r, x_s, x_coords)
-
-        # Data loss (MSE between predicted travel times and observed ToF)
-        data_loss = self.mse_loss(T_pred.squeeze(), observed_tof.squeeze())
-
-        # Physics loss (enforcing the eikonal equation)
-        physics_loss = self.compute_physics_loss(T_grid, x_coords, c_map)
-
-        # Total loss
-        total_loss = data_loss + self.physics_loss_weight * physics_loss
-
-        return total_loss, data_loss.item(), physics_loss.item()
-
-    def compute_physics_loss(self, T_grid, x_coords, c_map):
-
-        # Flatten tensors for gradient computation
-        T_grid_flat = T_grid.view(-1)  # Shape: [batch_size * num_points]
-        x_coords_flat = x_coords.view(-1, 2)  # Shape: [batch_size * num_points, 2]
+import torch
+import torch.nn.functional as F
 
 
-        # Compute gradient of T with respect to x_coords
-        grad_T = torch.autograd.grad(
-            outputs=T_grid_flat,
-            inputs=x_coords_flat,
-            grad_outputs=torch.ones_like(T_grid_flat),
-            create_graph=True
-        )[0]  # Shape: [batch_size * num_points, 2]
+def compute_eikonal_loss(predicted_tof, sos_map, epsilon=1e-8):
+    """
+    Computes the Eikonal loss for the predicted ToF and SoS map in a numerically stable manner.
 
-        # Interpolate c(x) at x_coords
-        c_at_coords = self.interpolate_c(c_map, x_coords)
+    Parameters:
+    predicted_tof (torch.Tensor):
+        The predicted ToF tensor of shape (C, W, H), where C is the number of sources (32).
+    sos_map (torch.Tensor):
+        The speed of sound map of shape (W, H).
+    epsilon (float, optional):
+        A small constant to prevent division by zero and numerical instability. Defaults to 1e-8.
 
-        # Flatten c_at_coords
-        c_at_coords_flat = c_at_coords.view(-1)  # Shape: [batch_size * num_points]
+    Returns:
+    torch.Tensor:
+        The computed Eikonal loss as a scalar tensor.
+    """
+    # Validate input dimensions
+    if predicted_tof.dim() != 3:
+        raise ValueError(f"predicted_tof must be a 3D tensor of shape (C, W, H), but got shape {predicted_tof.shape}")
+    if sos_map.dim() != 2:
+        raise ValueError(f"sos_map must be a 2D tensor of shape (W, H), but got shape {sos_map.shape}")
 
-        # Compute norm of grad_T
-        grad_T_norm = torch.norm(grad_T, dim=1)  # Shape: [batch_size * num_points]
+    C, W, H = predicted_tof.shape
 
-        # Compute physics loss
-        physics_loss = torch.mean((grad_T_norm - 1.0 / c_at_coords_flat) ** 2)
-        return physics_loss
+    # Ensure sos_map has no zeros by clamping
+    sos_map_safe = torch.clamp(sos_map, min=epsilon)  # Shape: (W, H)
 
-    def interpolate_c(self, c_map, x_coords):
-        batch_size, num_points, _ = x_coords.shape
-        H, W = c_map.shape[2], c_map.shape[3]
+    # Expand sos_map to match the number of channels in predicted_tof
+    sos_map_safe = sos_map_safe.unsqueeze(0).expand_as(predicted_tof)  # Shape: (C, W, H)
 
-        # Normalize spatial coordinates to [-1, 1] for grid_sample
-        x_norm = (x_coords[:, :, 0] / self.L_x) * 2.0 - 1.0
-        y_norm = (x_coords[:, :, 1] / self.L_y) * 2.0 - 1.0
-        grid = torch.stack((x_norm, y_norm), dim=-1)  # Shape: [batch_size, num_points, 2]
+    # Compute gradients using Sobel filters
+    grad_x, grad_y = compute_gradients(predicted_tof)  # Both shape: (C, W, H)
 
-        # Reshape grid for grid_sample
-        grid = grid.view(batch_size, num_points, 1, 2)  # Shape: [batch_size, num_points, 1, 2]
+    # Compute the norm of the gradient
+    grad_tof_norm = torch.sqrt(grad_x ** 2 + grad_y ** 2) + epsilon  # Shape: (C, W, H)
 
-        # Interpolate c_map at grid points
-        c_at_coords = F.grid_sample(c_map, grid, mode='bilinear', align_corners=False)  # Shape: [batch_size, 1, num_points, 1]
-        c_at_coords = c_at_coords.squeeze(1).squeeze(2)  # Shape: [batch_size, num_points]
+    # Compute the inverse of the speed of sound
+    inv_sos = 1.0 / sos_map_safe  # Shape: (C, W, H)
 
-        return c_at_coords
+    # Compute the Eikonal loss using Mean Squared Error
+    eikonal_loss = F.mse_loss(grad_tof_norm, inv_sos)
 
+    return eikonal_loss
+
+
+def get_sobel_kernels(device, dtype):
+    """
+    Returns Sobel kernels for x and y directions.
+
+    Parameters:
+    - device: torch.device
+    - dtype: torch.dtype
+
+    Returns:
+    - Gx: torch.Tensor of shape (1, 1, 3, 3)
+    - Gy: torch.Tensor of shape (1, 1, 3, 3)
+    """
+    # Define Sobel kernels
+    Gx = torch.tensor([[-1., 0., +1.],
+                       [-2., 0., +2.],
+                       [-1., 0., +1.]], device=device, dtype=dtype).view(1, 1, 3, 3)
+
+    Gy = torch.tensor([[-1., -2., -1.],
+                       [0., 0., 0.],
+                       [+1., +2., +1.]], device=device, dtype=dtype).view(1, 1, 3, 3)
+
+    return Gx, Gy
+
+
+def compute_gradients(predicted_tof):
+    """
+    Computes the gradients of the predicted ToF tensor using Sobel filters.
+
+    Parameters:
+    - predicted_tof: torch.Tensor of shape (C, W, H)
+
+    Returns:
+    - grad_x: torch.Tensor of shape (C, W, H)
+    - grad_y: torch.Tensor of shape (C, W, H)
+    """
+    C, W, H = predicted_tof.shape
+    device = predicted_tof.device
+    dtype = predicted_tof.dtype
+
+    # Add batch dimension for conv2d: (N, C, W, H)
+    predicted_tof = predicted_tof.unsqueeze(0)  # Shape: (1, C, W, H)
+
+    # Define Sobel kernels
+    Gx, Gy = get_sobel_kernels(device, dtype)
+
+    # Repeat kernels for each channel
+    Gx = Gx.repeat(C, 1, 1, 1)  # Shape: (C, 1, 3, 3)
+    Gy = Gy.repeat(C, 1, 1, 1)  # Shape: (C, 1, 3, 3)
+
+    # Apply convolution with groups=C to compute per-channel gradients
+    grad_x = F.conv2d(predicted_tof, Gx, padding=1, groups=C)  # Shape: (1, C, W, H)
+    grad_y = F.conv2d(predicted_tof, Gy, padding=1, groups=C)  # Shape: (1, C, W, H)
+
+    # Remove batch dimension
+    grad_x = grad_x.squeeze(0)  # Shape: (C, W, H)
+    grad_y = grad_y.squeeze(0)  # Shape: (C, W, H)
+
+    return grad_x, grad_y
