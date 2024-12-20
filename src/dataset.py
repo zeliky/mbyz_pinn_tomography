@@ -60,20 +60,20 @@ class TofDataset(Dataset):
         tof_dimensions = (int(self.sources_amount), int(self.receivers_amount))
 
         # load images
-        anatomy_img = self._prepare_sos_image(entry['anatomy'], anatomy_dimensions) # [H,W]
+        tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
+        anatomy_img = self._prepare_image(entry['anatomy'], anatomy_dimensions)
 
-        # Load real measurements from matlab files (.mat)
-        mat_data = loadmat(entry['mat'])
-
-        tof_inputs = self._generate_tof_tensor(mat_data)
-        known_indices = self._create_known_indices(mat_data)
-        boundary_indices = self._create_boundary_indices(mat_data)
         return {
-            'tof_inputs': tof_inputs,
-            'known_indices': known_indices,
-            'boundary_indices': boundary_indices,
             'anatomy': anatomy_img,
+            'tof': tof_img,
         }
+
+
+
+
+
+
+
 
     def _prepare_mat_data(self, path):
         #log_message(f'loading mat file {path}')
@@ -84,7 +84,7 @@ class TofDataset(Dataset):
         source_positions = np.column_stack([xs_sources, ys_sources])  # [num_sources, 2]
 
         xs_receivers = np.array(mat_data['xs_receivers']).flatten()
-        ys_receivers = np.array(mat_data['ys_receivers'] ).flatten()
+        ys_receivers = np.array(mat_data['ys_receivers']).flatten()
         receiver_positions = np.column_stack([xs_receivers, ys_receivers])  # [num_receivers, 2]
 
         tof_to_receivers = np.array(mat_data['t_obs'] )  # [num_sources, num_receivers]
@@ -153,18 +153,7 @@ class TofDataset(Dataset):
                     self.file_index[tumor_id]['mat'] = os.path.join(self.tof_path, file_name)
 
 
-    def _prepare_sos_image(self, path, dimensions):
-        transform = transforms.Compose([
-            transforms.Resize((int(dimensions[0]), int(dimensions[1])), interpolation=Image.BILINEAR),
-            transforms.Grayscale(num_output_channels=1),
-            transforms.ToTensor()
-        ])
-        img = Image.open(path)
-        image_tensor = transform(img)  # Shape: [1, H, W]
-        image_tensor = image_tensor.squeeze(0)  # Shape: [H, W]
-        image_tensor = image_tensor * (self.max_sos - self.min_sos) + self.min_sos  # Shape: [H, W]
 
-        return image_tensor
 
 
     def _generate_tof_tensor(self,mat_data):

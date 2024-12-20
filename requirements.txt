@@ -8,3 +8,5 @@ torchvision
 pandas
 mpld3
 tqdm
+
+segmentation-models-pytorch

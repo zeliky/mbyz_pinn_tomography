@@ -28,46 +28,29 @@ class PINNTrainer:
     def train_model(self):
         train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
         val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False)
-
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-
         model = self.model.to(self.device)
-
+        criterion = nn.MSELoss()
+        num_epochs = self.epochs
         for epoch in range(self.epochs):
             model.train()
-            running_loss = 0.0
+            epoch_loss = 0
             with tqdm(total=train_loader.__len__()) as pbar:
                 pbar.set_description("Training" )
                 optimizer.zero_grad()
 
                 for batch in train_loader:
-                    input_tof_tensor = batch['tof_inputs'].to(self.device)
-                    observed_tof = batch['tof_inputs'].clone().to(self.device)
+                    tof_tensor  = batch['tof'].to(self.device)
+                    sos_tensor = batch['anatomy'].to(self.device)
 
-                    boundary_indices = batch['boundary_indices'].to(self.device)
-                    sos_map = batch['anatomy'].to(self.device) # only one anatomy image
-                    predicted_tof = model(input_tof_tensor)
-
-                    predicted_boundary = predicted_tof.masked_select(boundary_indices)
-                    observed_boundary = observed_tof.masked_select(boundary_indices)
-                    boundary_loss = F.mse_loss(predicted_boundary, observed_boundary)
-
-                    eikonal_loss = compute_eikonal_loss(predicted_tof.squeeze(), sos_map.squeeze())
-                    #print(f"pde_loss:{eikonal_loss}  bc_loss:{boundary_loss}")
-
-                    #total_loss =  self.pde_weight * eikonal_loss + self.bc_weight * boundary_loss
-                    total_loss =  self.pde_weight * eikonal_loss
-
-
-                    # Backward pass and optimization
-                    total_loss.backward()
-
-                    # Gradient Clipping to prevent exploding gradients
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.zero_grad()
+                    sos_pred = model(tof_tensor)
+                    loss = criterion(sos_pred, sos_tensor)
+                    loss.backward()
                     optimizer.step()
+                    epoch_loss += loss.item()
                     pbar.update(1)
-            print(f"Epoch {epoch}, Loss: {total_loss.item()}")
-
+                log_message(f'Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss / len(train_loader):.6f}')
 
             # Validation
             self.model.eval()
@@ -76,21 +59,16 @@ class PINNTrainer:
                 with tqdm(total=val_loader.__len__()) as pbar:
                     pbar.set_description("Validation ")
                     for batch in val_loader:
-                        input_tof_tensor = batch['tof_inputs'].to(self.device)
-                        observed_tof = batch['tof_inputs'].copy().to(self.device)
-                        known_indices = batch['known_indices'].to(self.device)
-                        boundary_indices = batch['boundary_indices'].to(self.device)
-                        sos_map = batch['anatomy'].to(self.device)
-                        predicted_tof = model(input_tof_tensor)
-                        data_loss = F.mse_loss(predicted_tof[:, known_indices], observed_tof[:, known_indices])
-                        boundary_loss = F.mse_loss(predicted_tof[:, boundary_indices],
-                                                   input_tof_tensor[:, boundary_indices])
-                        eikonal_loss = compute_eikonal_loss(predicted_tof, sos_map)
-                        val_loss = alpha * data_loss + self.pde_weight * eikonal_loss + self.bc_weight * boundary_loss
+                        tof_tensor = batch['tof'].to(self.device)
+                        sos_tensor = batch['anatomy'].to(self.device)
+                        sos_pred = model(tof_tensor)
+                        loss = criterion(sos_pred, sos_tensor)
+                        val_loss += loss.item()
                         pbar.update(1)
 
-            log_message(f"Epoch {epoch+1}/{self.epochs}, Train Loss: {running_loss/len(train_loader):.4f}, Val Loss: {val_loss/len(val_loader):.4f}")
+                    log_message(f'Epoch {epoch + 1}/{num_epochs}, Val Loss: {val_loss / len(val_loader):.6f}')
             self.save_state(model, optimizer, val_loss, epoch)
+
 
     def get_domain_coords(self):
         x_min, x_max = 0.0, 1.0
@@ -120,37 +98,43 @@ class PINNTrainer:
         log_message(f"Model saved to {save_path}")
 
     def visualize_predictions(self,  num_samples=5):
-        val_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False)
+        val_loader = DataLoader(self.val_dataset, batch_size=10, shuffle=False)
         self.model.eval()
         with torch.no_grad():
             count = 0
             for batch in val_loader:
-                inputs = batch['inputs'].to(self.device)
-                anatomy = batch['anatomy'].cpu().squeeze(0).squeeze(0)  # [1,H,W] -> [H,W]
+                tof = batch['tof'].to(self.device)
+                anatomy = batch['anatomy'].cpu()
+                c_pred = self.model(tof)
+                for i in range(c_pred.size(0)):
+                    tof_np = tof[i].cpu().numpy()
+                    anatomy_np = anatomy[i].numpy()
+                    c_pred_np = c_pred[i].cpu().numpy()
 
-                t, c = self.model(inputs)
-                c_pred= c.cpu().squeeze(0).squeeze(0)  # [1,H,W] -> [H,W]
-                # Convert to numpy
-                anatomy_np = anatomy.numpy()
-                c_pred_np = c_pred.numpy()
 
-                # Plot anatomy and c_pred side by side
-                fig, axs = plt.subplots(1, 2, figsize=(8, 4))
-                axs[0].imshow(anatomy_np, cmap='gray')
-                axs[0].set_title('Original Anatomy')
-                axs[0].axis('off')
+                    # Plot anatomy and c_pred side by side
+                    fig, axs = plt.subplots(1, 3, figsize=(8, 4))
 
-                axs[1].imshow(c_pred_np, cmap='jet')
-                axs[1].set_title('Predicted SoS (c_pred)')
-                axs[1].axis('off')
+                    axs[0].imshow(tof_np.squeeze(0), cmap='gray')
+                    axs[0].set_title('TOF')
+                    axs[0].axis('off')
 
-                plt.tight_layout()
-                plt.show()
-                log_image(fig)
-                log_message(' ')
-                count += 1
-                if count >= num_samples:
-                    break
+
+                    axs[1].imshow(anatomy_np.squeeze(0), cmap='gray')
+                    axs[1].set_title('Original Anatomy')
+                    axs[1].axis('off')
+
+                    axs[2].imshow(c_pred_np.squeeze(0), cmap='jet')
+                    axs[2].set_title('Predicted SoS (c_pred)')
+                    axs[2].axis('off')
+
+                    plt.tight_layout()
+                    plt.show()
+                    log_image(fig)
+                    log_message(' ')
+                    count += 1
+                    if count >= num_samples:
+                        break
 
 
 def _bilinear_interpolate(tensor, coords):
