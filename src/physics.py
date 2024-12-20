@@ -21,6 +21,8 @@ def compute_eikonal_loss(predicted_tof, sos_map, epsilon=1e-8):
     torch.Tensor:
         The computed Eikonal loss as a scalar tensor.
     """
+
+
     # Validate input dimensions
     if predicted_tof.dim() != 3:
         raise ValueError(f"predicted_tof must be a 3D tensor of shape (C, W, H), but got shape {predicted_tof.shape}")
@@ -28,9 +30,12 @@ def compute_eikonal_loss(predicted_tof, sos_map, epsilon=1e-8):
         raise ValueError(f"sos_map must be a 2D tensor of shape (W, H), but got shape {sos_map.shape}")
 
     C, W, H = predicted_tof.shape
+    print(predicted_tof)
+    predicted_tof_safe = torch.clamp(predicted_tof, min=epsilon)
 
     # Ensure sos_map has no zeros by clamping
     sos_map_safe = torch.clamp(sos_map, min=epsilon)  # Shape: (W, H)
+
 
     # Expand sos_map to match the number of channels in predicted_tof
     sos_map_safe = sos_map_safe.unsqueeze(0).expand_as(predicted_tof)  # Shape: (C, W, H)

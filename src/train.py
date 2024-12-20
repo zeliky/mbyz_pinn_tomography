@@ -21,9 +21,9 @@ class PINNTrainer:
         self.epochs = kwargs.get('epochs', 10)
         self.batch_size = kwargs.get('batch_size', 1)
         self.lr = kwargs.get('lr',  1e-3)
-        self.data_weight = kwargs.get('data_weight',  1.0)
+        self.data_weight = kwargs.get('data_weight',  1e-4)
         self.pde_weight = kwargs.get('pde_weight',  1.0)
-        self.bc_weight = kwargs.get('bc_weight',  1.0)
+        self.bc_weight = kwargs.get('bc_weight',  1e-4)
 
     def train_model(self):
         train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
@@ -43,24 +43,21 @@ class PINNTrainer:
                 for batch in train_loader:
                     input_tof_tensor = batch['tof_inputs'].to(self.device)
                     observed_tof = batch['tof_inputs'].clone().to(self.device)
-                    known_indices = batch['known_indices'].to(self.device)
+
                     boundary_indices = batch['boundary_indices'].to(self.device)
                     sos_map = batch['anatomy'].to(self.device) # only one anatomy image
                     predicted_tof = model(input_tof_tensor)
 
-                    predicted_known = predicted_tof.masked_select(known_indices)
-                    observed_known = observed_tof.masked_select(known_indices)
                     predicted_boundary = predicted_tof.masked_select(boundary_indices)
                     observed_boundary = observed_tof.masked_select(boundary_indices)
-
-                    data_loss = F.mse_loss(predicted_known, observed_known)
                     boundary_loss = F.mse_loss(predicted_boundary, observed_boundary)
 
                     eikonal_loss = compute_eikonal_loss(predicted_tof.squeeze(), sos_map.squeeze())
+                    #print(f"pde_loss:{eikonal_loss}  bc_loss:{boundary_loss}")
 
-                    print(f"mse_loss:{data_loss} , pde_loss:{eikonal_loss}  bc_loss:{boundary_loss}")
+                    #total_loss =  self.pde_weight * eikonal_loss + self.bc_weight * boundary_loss
+                    total_loss =  self.pde_weight * eikonal_loss
 
-                    total_loss = self.data_weight * data_loss + self.pde_weight * eikonal_loss
 
                     # Backward pass and optimization
                     total_loss.backward()

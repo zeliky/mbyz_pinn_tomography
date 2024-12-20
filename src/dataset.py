@@ -24,11 +24,13 @@ class TofDataset(Dataset):
 
         self.grid_size = kwargs.get('grid_size', 128.0)
 
-        self.min_sos = kwargs.get('min_sos', 140)   # speed of sound in anatomy
-        self.max_sos = kwargs.get('min_sos', 145)   # speed of sound in background
+        self.min_sos = kwargs.get('min_sos', 1400)   # speed of sound in anatomy
+        self.max_sos = kwargs.get('min_sos', 1450)   # speed of sound in background
 
         self.min_tof = kwargs.get('min_tof', 0)
         self.max_tof = kwargs.get('max_tof', 100)
+        self.tof_scale_factor = kwargs.get('tof_scale_factor', 1e-4)
+        self.sos_scale_factor = kwargs.get('tof_scale_factor', 1e-3)
 
         self.modes_path = {
             'train': app_settings.train_path,
@@ -161,6 +163,7 @@ class TofDataset(Dataset):
         image_tensor = transform(img)  # Shape: [1, H, W]
         image_tensor = image_tensor.squeeze(0)  # Shape: [H, W]
         image_tensor = image_tensor * (self.max_sos - self.min_sos) + self.min_sos  # Shape: [H, W]
+
         return image_tensor
 
 
@@ -177,7 +180,7 @@ class TofDataset(Dataset):
         num_receivers = len(xs_receivers)
 
         # Initialize the tensor with shape (num_sources, W, H)
-        tof_tensor = torch.zeros((num_sources, int(self.anatomy_width), int(self.anatomy_height)))
+        tof_tensor = torch.ones((num_sources, int(self.anatomy_width), int(self.anatomy_height)))
 
         # Populate the tensor
         for source_idx in range(num_sources):
@@ -194,7 +197,7 @@ class TofDataset(Dataset):
                 receiver_y = math.floor(ys_receivers[receiver_idx])
 
                 # Place normalized ToF value at the receiver's location
-                tof_tensor[source_idx, receiver_y, receiver_x] = t_obs[source_idx, receiver_idx]
+                tof_tensor[source_idx, receiver_y, receiver_x] = t_obs[source_idx, receiver_idx] * self.tof_scale_factor
 
         return tof_tensor
 
