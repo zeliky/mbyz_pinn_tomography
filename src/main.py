@@ -8,7 +8,7 @@ from model_pinn_resnet import TofToSosUNetModel
 import os
 
 
-checkpoint_path = 'pinn_tof-sos_model.2024_12_20_13_47_29_333979-6.pth'
+checkpoint_path = 'pinn_tof-sos_model.2024_12_20_15_53_51_872420-0.pth'
 
 
 def train_sos_predictor():
@@ -36,6 +36,6 @@ if __name__ == "__main__":
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     log_message("[main.py] Starting PINN training pipeline...")
 
-    #train_sos_predictor()
+    train_sos_predictor()
 
 
