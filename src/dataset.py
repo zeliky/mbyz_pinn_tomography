@@ -107,6 +107,7 @@ class TofDataset(Dataset):
         known_tof = np.array(known_tof)
         return {
            'x_s': source_positions,
+           'x_r': receiver_positions,
            'x_o': known_tof
         }
 

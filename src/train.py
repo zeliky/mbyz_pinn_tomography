@@ -69,15 +69,7 @@ class PINNTrainer:
             self.save_state(self.model, optimizer, val_loss, epoch)
 
 
-    def get_domain_coords(self):
-        x_min, x_max = 0.0, 1.0
-        y_min, y_max = 0.0, 1.0
-        num_collocation = 50 * 50
-        coords = torch.rand(num_collocation, 2, device=self.device)
-        coords[:, 0] = coords[:, 0] * (x_max - x_min) + x_min
-        coords[:, 1] = coords[:, 1] * (y_max - y_min) + y_min
-        coords.requires_grad_(True)
-        return coords
+
 
     def load_checkpoint(self, checkpoint_path):
         checkpoint_path = f"{app_settings.output_folder}/{checkpoint_path}"
