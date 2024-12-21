@@ -55,9 +55,11 @@ class TofDataset(Dataset):
 
     def __getitem__(self, idx):
         entry = self.files_index[idx]
-
         anatomy_dimensions = (int(self.anatomy_height), int(self.anatomy_width))
         tof_dimensions = (int(self.sources_amount), int(self.receivers_amount))
+
+        #prepare tof values
+        mat_data = self._prepare_mat_data( entry['mat'])
 
         # load images
         tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
@@ -66,49 +68,48 @@ class TofDataset(Dataset):
         return {
             'anatomy': anatomy_img,
             'tof': tof_img,
+            'x_s': mat_data['x_s'],
+            'x_o': mat_data['x_o']
         }
-
-
-
-
-
-
 
 
     def _prepare_mat_data(self, path):
         #log_message(f'loading mat file {path}')
         mat_data = loadmat(path)
 
-        xs_sources = np.array(mat_data['xs_sources'] ).flatten()
-        ys_sources = np.array(mat_data['ys_sources'] ).flatten()
+        xs_sources = np.array(mat_data['xs_sources'] / self.anatomy_height ).flatten()
+        ys_sources = np.array(mat_data['ys_sources'] / self.anatomy_width ).flatten()
         source_positions = np.column_stack([xs_sources, ys_sources])  # [num_sources, 2]
 
-        xs_receivers = np.array(mat_data['xs_receivers']).flatten()
-        ys_receivers = np.array(mat_data['ys_receivers']).flatten()
+        xs_receivers = np.array(mat_data['xs_receivers'] / self.anatomy_height).flatten()
+        ys_receivers = np.array(mat_data['ys_receivers'] / self.anatomy_width ).flatten()
         receiver_positions = np.column_stack([xs_receivers, ys_receivers])  # [num_receivers, 2]
 
-        tof_to_receivers = np.array(mat_data['t_obs'] )  # [num_sources, num_receivers]
+        tof_to_receivers = np.array((mat_data['t_obs'] / self.max_tof))  # [num_sources, num_receivers]
 
-        source_indices, receiver_indices = np.meshgrid(
-            np.arange(self.sources_amount),
-            np.arange(self.receivers_amount),
-            indexing='ij'
-        )
-        source_indices = source_indices.flatten()
-        receiver_indices = receiver_indices.flatten()
+        num_sources = self.sources_amount
+        known_tof = []
+        # Initial conditions: source-to-source pairs
+        for i in range(num_sources):
+            xs_i, ys_i = source_positions[i]
+            # source to itself = 0
+            known_tof.append([xs_i, ys_i, xs_i, ys_i, 0.0])
 
-        x_s_pairs = source_positions[source_indices]     # [num_pairs, 2]
-        x_r_pairs = receiver_positions[receiver_indices] # [num_pairs, 2]
-        x_o_pairs = tof_to_receivers[source_indices, receiver_indices] # [num_pairs]
+        # Boundary conditions: source-to-receiver pairs
+        num_receivers = receiver_positions.shape[0]
+        for i in range(num_sources):
+            xs_i, ys_i = source_positions[i]
+            for j in range(num_receivers):
+                xr_j, yr_j = receiver_positions[j]
+                tof = tof_to_receivers[i, j]
+                known_tof.append([xs_i, ys_i, xr_j, yr_j, tof])
 
-        x_s = torch.tensor(x_s_pairs, dtype=torch.float32)
-        x_r = torch.tensor(x_r_pairs, dtype=torch.float32)
-        x_o = torch.tensor(x_o_pairs, dtype=torch.float32)
-
+        known_tof = np.array(known_tof)
+        print(source_positions.shape)
+        print(known_tof.shape)
         return {
-            'x_s': x_s,
-            'x_r': x_r,
-            'x_o': x_o
+           'x_s': source_positions,
+           'x_o': known_tof
         }
 
     def _prepare_image(self, path, dimensions):
