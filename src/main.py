@@ -4,7 +4,8 @@ from Terminal_and_HTML_Code.Terminal_and_HTML import terminal_html
 from report_dataset_info import report_dataset_info
 from dataset import TofDataset
 from train import PINNTrainer
-from model_pinn_resnet import TofToSosUNetModel
+from models.resnet_ltsm import TofToSosUNetModel
+from training_steps_handlers import SosResnetTrainingStep
 import os
 
 
@@ -12,19 +13,19 @@ sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
 tof_checkpoint_path = None
 
 
-
 def train_sos_predictor():
     global sos_checkpoint_path
     epochs = 50
     trainer = PINNTrainer(model=TofToSosUNetModel(),
+                          training_step_handler=SosResnetTrainingStep(),
                           batch_size=2,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,
                           lr=1e-5
                           )
-
-    trainer.load_checkpoint(checkpoint_path)
+    if sos_checkpoint_path is not None:
+        trainer.load_checkpoint(sos_checkpoint_path)
     trainer.train_model()
     log_message(' ')
 

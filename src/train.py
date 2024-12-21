@@ -11,12 +11,19 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 
+
+
+
+
 class PINNTrainer:
-    def __init__(self, model,train_dataset,val_dataset,  **kwargs):
+    def __init__(self, model, training_step_handler, train_dataset,val_dataset,  **kwargs):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = model.to(self.device)
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
+
+        self.training_step_handler = training_step_handler
+        self.training_step_handler.init(model=model, device=self.device)
 
         self.epochs = kwargs.get('epochs', 10)
         self.batch_size = kwargs.get('batch_size', 1)
@@ -29,23 +36,18 @@ class PINNTrainer:
         train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
         val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False)
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-        model = self.model.to(self.device)
-        criterion = nn.MSELoss()
+
         num_epochs = self.epochs
         for epoch in range(self.epochs):
-            model.train()
+            self.training_step_handler.set_eval_mode()
             epoch_loss = 0
             with tqdm(total=train_loader.__len__()) as pbar:
-                pbar.set_description("Training" )
+                pbar.set_description("Training")
                 optimizer.zero_grad()
 
                 for batch in train_loader:
-                    tof_tensor  = batch['tof'].to(self.device)
-                    sos_tensor = batch['anatomy'].to(self.device)
-
                     optimizer.zero_grad()
-                    sos_pred = model(tof_tensor)
-                    loss = criterion(sos_pred, sos_tensor)
+                    loss = self.training_step_handler.perform_step(batch)
                     loss.backward()
                     optimizer.step()
                     epoch_loss += loss.item()
@@ -53,21 +55,18 @@ class PINNTrainer:
                 log_message(f'Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss / len(train_loader):.6f}')
 
             # Validation
-            self.model.eval()
+            self.training_step_handler.set_eval_mode()
             val_loss = 0.0
             with torch.no_grad():
                 with tqdm(total=val_loader.__len__()) as pbar:
                     pbar.set_description("Validation ")
                     for batch in val_loader:
-                        tof_tensor = batch['tof'].to(self.device)
-                        sos_tensor = batch['anatomy'].to(self.device)
-                        sos_pred = model(tof_tensor)
-                        loss = criterion(sos_pred, sos_tensor)
+                        loss = self.training_step_handler.perform_step(batch)
                         val_loss += loss.item()
                         pbar.update(1)
 
                     log_message(f'Epoch {epoch + 1}/{num_epochs}, Val Loss: {val_loss / len(val_loader):.6f}')
-            self.save_state(model, optimizer, val_loss, epoch)
+            self.save_state(self.model, optimizer, val_loss, epoch)
 
 
     def get_domain_coords(self):

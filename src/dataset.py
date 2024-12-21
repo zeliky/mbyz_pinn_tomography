@@ -105,8 +105,6 @@ class TofDataset(Dataset):
                 known_tof.append([xs_i, ys_i, xr_j, yr_j, tof])
 
         known_tof = np.array(known_tof)
-        print(source_positions.shape)
-        print(known_tof.shape)
         return {
            'x_s': source_positions,
            'x_o': known_tof
