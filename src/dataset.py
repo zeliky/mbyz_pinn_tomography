@@ -69,7 +69,9 @@ class TofDataset(Dataset):
             'anatomy': anatomy_img,
             'tof': tof_img,
             'x_s': mat_data['x_s'],
-            'x_o': mat_data['x_o']
+            'x_r': mat_data['x_r'],
+            'x_o': mat_data['x_o'],
+            'raw_t_obs': mat_data['raw_t_obs']
         }
 
 
@@ -108,7 +110,8 @@ class TofDataset(Dataset):
         return {
            'x_s': source_positions,
            'x_r': receiver_positions,
-           'x_o': known_tof
+           'x_o': known_tof,
+           'raw_t_obs' : tof_to_receivers
         }
 
     def _prepare_image(self, path, dimensions):

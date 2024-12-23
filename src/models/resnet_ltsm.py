@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import segmentation_models_pytorch as smp
 
@@ -21,7 +22,7 @@ class TofPredictorModel(nn.Module):
         super().__init__()
 
         # 1) LSTM aggregator that encodes known measurements
-        self.encoder = nn.LSTM(input_dim, hidden_dim, batch_first=True)
+        self.encoder = nn.LSTM(input_dim, hidden_dim, batch_first=True).float()
         self.fc = nn.Linear(hidden_dim, 64)  # final layer to get context
 
         # 2) MLP that takes (x,y) + context -> 32 time-of-flights
@@ -34,28 +35,35 @@ class TofPredictorModel(nn.Module):
         )
 
      def forward(self, known_tofs, xy):
-        """
-        known_tofs: shape [N, 5] or [1, N, 5]
-            (the known source-receiver-tof data)
-        xy: shape [M, 2]
-            (the query points for which we want to predict 32 time-of-flights)
-        """
-        # 1) Encode the known_tofs
-        #    If needed, expand known_tofs to [1, N, 5] for LSTM.
-        if len(known_tofs.shape) == 2:
-            known_tofs = known_tofs.unsqueeze(0)  # shape [1, N, 5]
+         """
+         known_tofs: shape [B, N, 5]
+             (the known source-receiver-tof data for each sample in the batch)
+         xy: shape [B, M, 2]
+             (the query points for which we want to predict 32 time-of-flights)
+         Returns:
+             T_pred: shape [B, M, 32]
+         """
+         # Run LSTM on known measurements
+         # LSTM outputs:
+         #   output: [B, N, hidden_dim] (if batch_first=True)
+         #   (h, c): [num_layers, B, hidden_dim]
+         _, (h, c) = self.encoder(known_tofs)
 
-        # LSTM forward
-        _, (h, c) = self.encoder(known_tofs)  # h.shape: [1, batch=1, hidden_dim]
-        hidden = h[-1]                        # shape: [hidden_dim]
-        context = self.fc(hidden)             # shape: [64]
+         # Take the last layer’s hidden state: shape [B, hidden_dim]
+         hidden = h[-1]
 
-        # 2) Predict for each (x,y) in xy
-        #    We replicate the single context for each row in xy
-        context_batched = context.unsqueeze(0).expand(xy.size(0), -1)  # [M, 64]
-        mlp_input = torch.cat([xy, context_batched], dim=1)            # [M, 66]
-        T_pred = self.predictor(mlp_input)                             # [M, 32]
+         # Map hidden state to 64-dim context
+         context = self.fc(hidden)  # [B, 64]
 
-        return T_pred
+         # Expand context to [B, M, 64] to match xy shape [B, M, 2]
+         B, M, _ = xy.shape
+         context_expanded = context.unsqueeze(1).expand(-1, M, -1)
+
+         # Concatenate (x,y) with context along the last dimension => [B, M, 66]
+         xyc = torch.cat((xy, context_expanded), dim=2)
+
+         # Predict time-of-flights => [B, M, 32]
+         T_pred = self.predictor(xyc)
+         return T_pred
 
 

@@ -38,8 +38,9 @@ class PINNTrainer:
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
 
         num_epochs = self.epochs
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
         for epoch in range(self.epochs):
-            self.training_step_handler.set_eval_mode()
+            self.training_step_handler.set_train_mode()
             epoch_loss = 0
             with tqdm(total=train_loader.__len__()) as pbar:
                 pbar.set_description("Training")
@@ -67,6 +68,7 @@ class PINNTrainer:
 
                     log_message(f'Epoch {epoch + 1}/{num_epochs}, Val Loss: {val_loss / len(val_loader):.6f}')
             self.save_state(self.model, optimizer, val_loss, epoch)
+            scheduler.step()
 
 
 
@@ -79,7 +81,7 @@ class PINNTrainer:
     def save_state(self, model, optimizer,loss, epoch):
         current_datetime = datetime.now()
         formatted_datetime = current_datetime.strftime("%Y_%m_%d_%H_%M_%S_%f")
-        save_path = f"{app_settings.output_folder}/pinn_tof-sos_model.{formatted_datetime}-{epoch}.pth"
+        save_path = f"{app_settings.output_folder}/pinn_tof-predictor_model.{formatted_datetime}-{epoch}.pth"
         torch.save({
             'state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
@@ -87,6 +89,18 @@ class PINNTrainer:
             'loss': loss,
         }, save_path)
         log_message(f"Model saved to {save_path}")
+
+    def check_tof(self):
+        val_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False)
+        self.model.eval()
+        with torch.no_grad():
+            count = 0
+            for batch in val_loader:
+                x_s = batch['x_s'].float().to(self.device)
+                x_r = batch['x_r'].float().to(self.device)
+                known_tof = batch['x_o'].float().to(self.device)
+                T_pred = self.model(known_tof, x_s)
+                print(T_pred)
 
     def visualize_predictions(self,  num_samples=5):
         val_loader = DataLoader(self.val_dataset, batch_size=10, shuffle=False)
