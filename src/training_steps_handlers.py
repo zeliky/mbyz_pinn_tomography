@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
-from physics import eikonal_loss
-
+from physics import eikonal_loss, initial_loss, boundary_loss
+from logger import log_message
 class BaseTrainingStep:
     def __init__(self):
         self.model = None
@@ -38,14 +38,35 @@ class TofToSosUNetTrainingStep(BaseTrainingStep):
 class TofPredictorTrainingStep(BaseTrainingStep):
     def __init__(self, **kwargs):
         super().__init__()
+        self.grid_w = kwargs.get('grid_w',128)
+        self.grid_h = kwargs.get('grid_h',128)
 
     def perform_step(self, batch):
+
         tof_tensor = batch['tof'].to(self.device)
         sos_tensor = batch['anatomy'].to(self.device)
+        x_s = batch['x_s'].float()
+        x_r = batch['x_r'].float()
+
         pred_tof = self.model(tof_tensor)
-        loss_pde = eikonal_loss(pred_tof, sos_tensor)
-        print(loss_pde)
-        return loss_pde
+
+        total_loss = 0.0
+        for idx,  pred in enumerate(pred_tof):
+            known_t = tof_tensor[idx].squeeze()
+            src_loc = (x_s[idx] * self.grid_h).int()
+            rec_loc = (x_r[idx] * self.grid_w).int()
+
+            loss_pde = 1e-3 * eikonal_loss(pred, sos_tensor[idx])
+            ic_loss  = 1e2 * initial_loss(pred, src_loc)
+            bc_loss  =  1e2* boundary_loss(pred, known_t, src_loc, rec_loc)
+
+            total_loss +=  loss_pde +  ic_loss +  bc_loss
+
+            #log_message(f"pde: {loss_pde} ic_loss: {ic_loss} bc_loss: {bc_loss}")
+
+
+        #log_message(f"loss: {total_loss} ")
+        return total_loss
 
 class TofPredictorTrainingStep_V1(BaseTrainingStep):
     def __init__(self, **kwargs):

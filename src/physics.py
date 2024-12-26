@@ -1,53 +1,100 @@
 import torch
+import math
 import torch.nn.functional as F
+from settings import app_settings
 
-import torch
-import torch.nn.functional as F
 
+def _to_sec(v):
+    t_min_ms = app_settings.min_tof   # in milliseconds
+    t_max_ms = app_settings.max_tof   # in milliseconds
+
+    t_ms = v * (t_max_ms - t_min_ms) + t_min_ms  # [B, ..., H, W] in ms
+    t_s = t_ms * 1e-3 #in second
+    return t_s
+
+def _to_mps(v):
+    c_min_mm_us = app_settings.min_sos   # in mm/us
+    c_max_mm_us = app_settings.max_sos   # in mm/us
+
+    c_mm_us = v * (c_max_mm_us - c_min_mm_us) + c_min_mm_us
+    c_m_s = c_mm_us * 1e3
+    return c_m_s
+
+
+def initial_loss(pred_tof, src_loc):
+    loss = 0.0
+    c = 0
+    for s_idx, sl in enumerate(src_loc):
+        p_tof = _to_sec(pred_tof[s_idx, sl[0], sl[1]])
+        # print(f"{p_tof}")
+        loss += torch.pow(p_tof,2)    # compare to 0
+        c += 1
+    return loss / c
+
+
+def boundary_loss(pred_tof, known_tof, src_loc, rec_loc):
+    loss = 0.0
+    c = 0
+    for s_idx, s in enumerate(src_loc):
+        for r_idx, r in enumerate(rec_loc):
+            k_tof = _to_sec(known_tof[s_idx, r_idx]) # known tof (obs)
+            p_tof = _to_sec(pred_tof[s_idx, r[0], r[1]])  # predicted tof on s layer, receiver position
+            # print(f"{k_tof - p_tof}")
+            loss += torch.pow(k_tof-p_tof, 2)  # compare to original tof
+            c += 1
+    return loss / c
 
 def eikonal_loss(
-        pred_tof,  # [B, ..., H, W]  normalized T in [0..1]
-        sos_map,  # [B, 1, H, W] or [1, 1, H, W], normalized c in [0..1]
-        T_min_ms=0.0,  # in milliseconds, e.g. 0
-        T_max_ms=100.0,  # in milliseconds, e.g. 100
-        c_min_mm_us=0.14,  # e.g. 0.45 mm/us
-        c_max_mm_us=0.145,  # e.g. 0.455 mm/us
-        pixel_size_m=1e-3  # 1 pixel = 1 mm => 1e-3 m
+        pred_tof,  # [B, ..., H, W]
+        sos_map,  # [B, 1, H, W] or [1, 1, H, W],
+
     ):
     """
     pred_tof: (B, n_src, H, W)
     sos_map:  (H, W) or (B, 1, H, W)
     returns:  scalar (tensor) for PDE loss
     """
+
+    pixel_size_m = app_settings.pixel_to_mm
     eps = 1e-8
     pde_losses = []
 
     # Iterate over each source channel
-    n_src = pred_tof.shape[1]
+    n_src = pred_tof.shape[0]
     for i in range(n_src):
-        # pred_tof_i shape: [B, 1, H, W]
-        pred_tof_i = pred_tof[:, i : i+1, :, :]
-        T_ms = pred_tof_i * (T_max_ms - T_min_ms) + T_min_ms  # [B, ..., H, W] in ms
-        T_s = T_ms * 1e-3  # [B, ..., H, W] in second
+        # pred_tof_i shape: [ 1, H, W]s
+        pred_tof_i = pred_tof[i : i+1, :, :]  # [  ..., H, W] in ms
 
-        c_mm_us = sos_map * (c_max_mm_us - c_min_mm_us) + c_min_mm_us
-        c_m_s = c_mm_us * 1e3
+        # T_ms = pred_tof_i * (T_max_ms - T_min_ms) + T_min_ms
+        # t_s = T_ms * 1e-3  # [B, ..., H, W] in second
+        t_s = _to_sec(pred_tof_i) # [B, ..., H, W] in second
 
-        # Finite differences
-        dx = T_s[:, :, :, 1:] - T_s[:, :, :, :-1] / pixel_size_m   # [B,1,H,W-1]
-        dy = T_s[:, :, 1:, :] - T_s[:, :, :-1, :] / pixel_size_m  # [B,1,H-1,W]
+        #c_mm_us = sos_map * (c_max_mm_us - c_min_mm_us) + c_min_mm_us
+        #c_m_s = c_mm_us * 1e3
+        c_m_s = _to_mps(sos_map)
+
+
+        # Finite differences --- change to torch.gradient
+        dx = t_s[ :, :, 1:] - t_s[:, :, :-1] / pixel_size_m   # [1,H,W-1]
+        dy = t_s[ :, 1:, :] - t_s[:, :-1, :] / pixel_size_m  # [1,H-1,W]
+        #dy, dx = torch.gradient(
+        #    t_s,
+        #    spacing=(pixel_size_m, pixel_size_m),
+        #    dim=(2, 3)
+        #)
+
 
         # Crop them so shapes match for sqrt:
-        #   dx has shape (B,1,H,W-1)
-        #   dy has shape (B,1,H-1,W)
-        # We'll do something like
-        dx_cropped = dx[:, :, :-1, :]    # [B,1,H-1,W-1]
-        dy_cropped = dy[:, :, :, :-1]    # [B,1,H-1,W-1]
+        #   dx has shape (1,H,W-1)
+        #   dy has shape (1,H-1,W)
 
-        grad_mag = torch.sqrt(dx_cropped**2 + dy_cropped**2 + eps)  # [B,1,H-1,W-1]
+        dx_cropped = dx[ :, :-1, :]    # [1,H-1,W-1]
+        dy_cropped = dy[  :, :, :-1]    # [1,H-1,W-1]
 
-        # Similarly, crop the sos map
-        sos_cropped = c_m_s[:, :, : grad_mag.shape[2], : grad_mag.shape[3]] # => [B,1,H-1,W-1]
+        grad_mag = torch.sqrt(dx_cropped**2 + dy_cropped**2 + eps)  # [1,H-1,W-1]
+
+        # crop the sos map
+        sos_cropped = c_m_s[ :, : grad_mag.shape[1], : grad_mag.shape[2]] # => [1,H-1,W-1]
 
         # PDE residual = |grad T| - 1/c
         residual = grad_mag - 1.0 / (sos_cropped + eps)
@@ -56,4 +103,5 @@ def eikonal_loss(
         pde_losses.append(pde_loss_i)
 
     # Sum or average PDE loss across all sources
+
     return sum(pde_losses) / n_src

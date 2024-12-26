@@ -22,7 +22,6 @@ class TofDataset(Dataset):
         self.anatomy_width = kwargs.get('anatomy_width', 128.0)
         self.anatomy_height = kwargs.get('anatomy_height', 128.0)
 
-        self.grid_size = kwargs.get('grid_size', 128.0)
 
         self.min_sos = kwargs.get('min_sos', 1400)   # speed of sound in anatomy
         self.max_sos = kwargs.get('min_sos', 1450)   # speed of sound in background
@@ -89,7 +88,6 @@ class TofDataset(Dataset):
         receiver_positions = np.column_stack([xs_receivers, ys_receivers])  # [num_receivers, 2]
 
         tof_to_receivers = np.array((mat_data['t_obs'] / self.max_tof))  # [num_sources, num_receivers]
-
         num_sources = self.sources_amount
         known_tof = []
         # Initial conditions: source-to-source pairs

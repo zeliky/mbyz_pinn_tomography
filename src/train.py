@@ -89,17 +89,29 @@ class PINNTrainer:
         }, save_path)
         log_message(f"Model saved to {save_path}")
 
-    def check_tof(self):
+    def check_tof(self, grid_h, grid_w):
         val_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False)
         self.model.eval()
         with torch.no_grad():
-            count = 0
             for batch in val_loader:
-                x_s = batch['x_s'].float().to(self.device)
-                x_r = batch['x_r'].float().to(self.device)
-                known_tof = batch['x_o'].float().to(self.device)
-                T_pred = self.model(known_tof, x_s)
-                print(T_pred)
+                input = batch['tof'].float().to(self.device)
+                x_s = batch['x_s'].float()
+                x_r = batch['x_r'].float()
+
+                T_pred = self.model(input)
+                known_tof = input.squeeze()
+                T_pred = T_pred.squeeze()
+                src_loc = (x_s.squeeze() * grid_h).int()
+                rec_loc = (x_r.squeeze() * grid_w).int()
+
+                for s_idx, s in enumerate(src_loc):
+                    p_tof = T_pred[s_idx, s[0], s[1]]
+                    print(f"seloc:({s_idx}, {s[0]},{s[1]}) k_tof: {0}  p_tof: {p_tof}")
+                    for r_idx, r in enumerate(rec_loc):
+                        k_tof = known_tof[s_idx, r_idx]
+                        p_tof= T_pred[s_idx, r[0],r[1]]
+                        print(f"   reloc:({s_idx}, {r[0]},{r[1]}) k_tof: {k_tof}  p_tof: {p_tof}")
+
 
     def visualize_predictions(self,  num_samples=5):
         val_loader = DataLoader(self.val_dataset, batch_size=10, shuffle=False)
