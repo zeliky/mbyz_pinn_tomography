@@ -12,7 +12,7 @@ import os
 
 sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
 #tof_checkpoint_path = 'pinn_tof-predictor_model.sources_only.pth'
-tof_checkpoint_path = None
+tof_checkpoint_path = 'pinn_tof-predictor_model.2024_12_26_11_56_04_383835-13.pth'
 
 
 def train_sos_predictor():
@@ -57,7 +57,7 @@ def train_tof_predictor():
     epochs = 50
     trainer = PINNTrainer(model=MultiSourceTOFModel(in_channels=1, n_src=32, base_filters=32),
                           training_step_handler=TofPredictorTrainingStep(),
-                          batch_size=5,
+                          batch_size=20,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,

@@ -2,9 +2,11 @@
 from dataset import TofDataset
 from train import PINNTrainer
 from models.resnet_ltsm import TofToSosUNetModel
+from training_steps_handlers import TofToSosUNetTrainingStep
 
-checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
+checkpoint_path = 'pinn_tof-sos_model.2tumors.pth'
 trainer = PINNTrainer(model=TofToSosUNetModel(),
+                        training_step_handler=TofToSosUNetTrainingStep(),
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['test'])
     )
