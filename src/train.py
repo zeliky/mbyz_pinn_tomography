@@ -4,7 +4,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from logger import log_message, log_image
-from physics import compute_eikonal_loss
 from settings import app_settings
 from datetime import datetime
 from tqdm import tqdm

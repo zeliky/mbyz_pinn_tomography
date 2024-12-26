@@ -2,101 +2,112 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Basic building blocks for a U-Net
-class DoubleConv(nn.Module):
+
+class ConvBlock(nn.Module):
+    """
+    A simple block of (Conv -> ReLU -> Conv -> ReLU),
+    optionally with batch normalization, etc.
+    """
+
     def __init__(self, in_channels, out_channels):
-        super(DoubleConv, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True)
+        super(ConvBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        return x
+
+
+class Encoder(nn.Module):
+    """
+    Example encoder that downsamples input from 32x32 -> 8x8 or 4x4.
+    Each step: ConvBlock -> maxpool (stride=2).
+    """
+
+    def __init__(self, in_channels=1, base_filters=32):
+        super(Encoder, self).__init__()
+        # You can adjust the depth as you like
+        self.block1 = ConvBlock(in_channels, base_filters)
+        self.block2 = ConvBlock(base_filters, base_filters * 2)
+        self.block3 = ConvBlock(base_filters * 2, base_filters * 4)
+
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+    def forward(self, x):
+        # x: [B, in_channels, 32, 32]
+        x = self.block1(x)  # [B, base_filters, 32, 32]
+        x = self.pool(x)  # [B, base_filters, 16, 16]
+        x = self.block2(x)  # [B, base_filters*2, 16, 16]
+        x = self.pool(x)  # [B, base_filters*2, 8, 8]
+        x = self.block3(x)  # [B, base_filters*4, 8, 8]
+        # optionally another pool -> [B, base_filters*4, 4, 4]
+        return x
+
+
+class Decoder(nn.Module):
+    """
+    Example decoder that upsamples from 8x8 -> 128x128.
+    Each step: (deconv/upsample) -> ConvBlock.
+    """
+
+    def __init__(self, out_channels=1, base_filters=32):
+        super(Decoder, self).__init__()
+        # Reverse of encoder
+        self.up1 = nn.ConvTranspose2d(base_filters * 4, base_filters * 2,
+                                      kernel_size=2, stride=2)
+        self.block1 = ConvBlock(base_filters * 2, base_filters * 2)
+
+        self.up2 = nn.ConvTranspose2d(base_filters * 2, base_filters,
+                                      kernel_size=2, stride=2)
+        self.block2 = ConvBlock(base_filters, base_filters)
+
+        # Another upsampling to go from 32x32 -> 64x64
+        self.up3 = nn.ConvTranspose2d(base_filters, base_filters // 2,
+                                      kernel_size=2, stride=2)
+        self.block3 = ConvBlock(base_filters // 2, base_filters // 2)
+
+        # Another upsampling from 64x64 -> 128x128
+        self.up4 = nn.ConvTranspose2d(base_filters // 2, base_filters // 4,
+                                      kernel_size=2, stride=2)
+        # final block
+        self.block4 = nn.Sequential(
+            nn.Conv2d(base_filters // 4, out_channels, kernel_size=3, padding=1)
+            # no ReLU if we want raw predicted T (could do one final conv)
         )
-    def forward(self, x):
-        return self.conv(x)
-
-class Down(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(Down, self).__init__()
-        self.down = nn.Sequential(
-            nn.MaxPool2d(2),
-            DoubleConv(in_channels, out_channels)
-        )
-    def forward(self, x):
-        return self.down(x)
-
-class Up(nn.Module):
-    def __init__(self, in_channels, out_channels, bilinear=True):
-        super(Up, self).__init__()
-        if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        else:
-            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-        self.conv = DoubleConv(in_channels, out_channels)
-
-    def forward(self, x1, x2):
-        x1 = self.up(x1)
-        diffY = x2.size()[2] - x1.size()[2]
-        diffX = x2.size()[3] - x1.size()[3]
-
-        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
-                         diffY // 2, diffY - diffY // 2])
-        x = torch.cat([x2, x1], dim=1)
-        return self.conv(x)
-
-class OutConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
-        return self.conv(x)
+        # x: [B, base_filters*4, 8, 8]
+        x = self.up1(x)  # [B, base_filters*2, 16, 16]
+        x = self.block1(x)  # [B, base_filters*2, 16, 16]
+
+        x = self.up2(x)  # [B, base_filters, 32, 32]
+        x = self.block2(x)  # [B, base_filters, 32, 32]
+
+        x = self.up3(x)  # [B, base_filters//2, 64, 64]
+        x = self.block3(x)  # [B, base_filters//2, 64, 64]
+
+        x = self.up4(x)  # [B, base_filters//4, 128, 128]
+        x = self.block4(x)  # [B, out_channels, 128, 128]
+        return x
 
 
-# Physics-Informed U-Net model
-# accepts 4 input channels:
-# [anatomy, tof, source_map, receiver_map]
-class PhysicsInformedUNet(nn.Module):
-    def __init__(self, n_channels=4, n_classes=2):
-        super(PhysicsInformedUNet, self).__init__()
-        self.inc = DoubleConv(n_channels, 64)
-        self.down1 = Down(64, 128)
-        self.down2 = Down(128, 256)
-        self.down3 = Down(256, 512)
-        self.down4 = Down(512, 512)
-        self.up1 = Up(1024, 256)
-        self.up2 = Up(512, 128)
-        self.up3 = Up(256, 64)
-        self.up4 = Up(128, 64)
-        self.outc = OutConv(64, n_classes)
+class MultiSourceTOFModel(nn.Module):
+    """
+    End-to-end model:
+      - Takes a batch of (B, 1, 32, 32) images (the "TOF matrix" or conditioning info)
+      - Encodes -> Decodes -> Produces [B, n_src, 128, 128] output
+    """
+
+    def __init__(self, in_channels=1, n_src=8, base_filters=32):
+        super(MultiSourceTOFModel, self).__init__()
+        self.encoder = Encoder(in_channels, base_filters)
+        self.decoder = Decoder(out_channels=n_src, base_filters=base_filters)
 
     def forward(self, x):
-        # x shape: [B,4,H,W]
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
-        out = self.outc(x)
+        # x: [B, in_channels, 32, 32]
+        enc = self.encoder(x)  # e.g. [B, base_filters*4, 8, 8]
+        out = self.decoder(enc)  # e.g. [B, n_src, 128, 128]
+        return out
 
-        T_pred = torch.sigmoid(out[:, 0:1, :, :])  # [B,1,H,W]
-        c_pred = torch.sigmoid(out[:, 1:2, :, :])  # [B,1,H,W]
-
-        return T_pred, c_pred
-
-    def compute_pde_residual(self, T_pred, c_pred):
-        grad_x = torch.diff(T_pred, dim=3, n=1)
-        grad_y = torch.diff(T_pred, dim=2, n=1)
-
-        grad_x = F.pad(grad_x, (0, 1, 0, 0), mode='replicate')
-        grad_y = F.pad(grad_y, (0, 0, 0, 1), mode='replicate')
-
-        grad_sq = grad_x ** 2 + grad_y ** 2
-
-        c_sq_inv = 1.0 / (c_pred ** 2 + 1e-8)
-        pde_residual = grad_sq - c_sq_inv
-        return pde_residual

@@ -5,12 +5,14 @@ from report_dataset_info import report_dataset_info
 from dataset import TofDataset
 from train import PINNTrainer
 from models.resnet_ltsm import TofToSosUNetModel, TofPredictorModel
+from models.pinn_unet import MultiSourceTOFModel
 from training_steps_handlers import TofToSosUNetTrainingStep, TofPredictorTrainingStep
 import os
 
 
 sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
-tof_checkpoint_path = 'pinn_tof-predictor_model.sources_only.pth'
+#tof_checkpoint_path = 'pinn_tof-predictor_model.sources_only.pth'
+tof_checkpoint_path = None
 
 
 def train_sos_predictor():
@@ -32,12 +34,30 @@ def train_sos_predictor():
     log_message("[main.py] Training pipeline complete.")
 
 
-def train_tof_predictor():
+def train_tof_predictor_v1():
     global tof_checkpoint_path
     epochs = 50
     trainer = PINNTrainer(model=TofPredictorModel(),
                           training_step_handler=TofPredictorTrainingStep(),
                           batch_size=20,
+                          train_dataset=TofDataset(['train']),
+                          val_dataset=TofDataset(['validation']),
+                          epochs=epochs,
+                          lr=1e-3
+                          )
+    if tof_checkpoint_path is not None:
+        trainer.load_checkpoint(tof_checkpoint_path)
+    trainer.train_model()
+    log_message(' ')
+
+    log_message("[main.py] Training pipeline complete.")
+
+def train_tof_predictor():
+    global tof_checkpoint_path
+    epochs = 50
+    trainer = PINNTrainer(model=MultiSourceTOFModel(in_channels=1, n_src=32, base_filters=32),
+                          training_step_handler=TofPredictorTrainingStep(),
+                          batch_size=5,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,

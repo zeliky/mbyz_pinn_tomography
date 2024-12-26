@@ -62,7 +62,8 @@ class TofDataset(Dataset):
         mat_data = self._prepare_mat_data( entry['mat'])
 
         # load images
-        tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
+        #tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
+        tof_img = self._prepare_image(entry['tof'], tof_dimensions)
         anatomy_img = self._prepare_image(entry['anatomy'], anatomy_dimensions)
 
         return {

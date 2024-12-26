@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch
+from physics import eikonal_loss
 
 class BaseTrainingStep:
     def __init__(self):
@@ -34,8 +35,19 @@ class TofToSosUNetTrainingStep(BaseTrainingStep):
         loss = self.criterion(sos_pred, sos_tensor)
         return loss
 
-
 class TofPredictorTrainingStep(BaseTrainingStep):
+    def __init__(self, **kwargs):
+        super().__init__()
+
+    def perform_step(self, batch):
+        tof_tensor = batch['tof'].to(self.device)
+        sos_tensor = batch['anatomy'].to(self.device)
+        pred_tof = self.model(tof_tensor)
+        loss_pde = eikonal_loss(pred_tof, sos_tensor)
+        print(loss_pde)
+        return loss_pde
+
+class TofPredictorTrainingStep_V1(BaseTrainingStep):
     def __init__(self, **kwargs):
         super().__init__()
         self.num_collocation = kwargs.get('num_collocation', 60*60)
@@ -69,7 +81,7 @@ class TofPredictorTrainingStep(BaseTrainingStep):
         bc_loss = 0.0
 
         for rec_idx, pred_tof in enumerate(T_pred):
-
+            print(raw_t_obs[rec_idx].shape)
             bc_loss += self.criterion(pred_tof, raw_t_obs[rec_idx])
         bc_loss = bc_loss
 
