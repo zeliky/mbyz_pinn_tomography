@@ -12,7 +12,7 @@ import os
 
 sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
 #tof_checkpoint_path = 'pinn_tof-predictor_model.sources_only.pth'
-tof_checkpoint_path = 'pinn_tof-predictor_model.2024_12_26_23_29_39_415886-1.pth'
+tof_checkpoint_path = None
 
 
 
