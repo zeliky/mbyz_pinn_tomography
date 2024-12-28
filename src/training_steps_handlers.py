@@ -81,13 +81,24 @@ class CombinedSosTofTrainingStep(BaseTrainingStep):
         x_s = batch['x_s'].float()
         x_r = batch['x_r'].float()
 
-        pred_sos, pred_tof = self.model(tof_tensor)
+        pred_sos, pred_tof= self.model(tof_tensor)
         #print(pred_sos.shape)
         #print(pred_tof.shape)
-        sos_loss = self.criterion(pred_sos, sos_tensor)
 
-        total_loss = sos_loss
-        log_message(f"loss: {total_loss} ")
+        mse_loss = self.criterion(pred_sos, sos_tensor)
+
+
+        total_pde = 0
+        c= 0
+        for idx, pred in enumerate(pred_tof):
+            c+=1
+            pde_loss =  eikonal_loss(pred, pred_sos)
+            total_pde += pde_loss
+            #log_message(f"mse_loss: {mse_loss} p_pde_loss: {pde_loss} ")
+
+        total_loss = mse_loss + total_pde/c
+        log_message(f"mse_loss: {mse_loss} pde_loss:{total_pde}")
+
         return total_loss
 
 

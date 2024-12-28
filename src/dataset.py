@@ -64,11 +64,14 @@ class TofDataset(Dataset):
         #tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
         #tof_img = self._prepare_image(entry['tof'], tof_dimensions)
         anatomy_img = self._prepare_image(entry['anatomy'], anatomy_dimensions)
+        anatomy_img_sml = self._prepare_image(entry['anatomy'], tof_dimensions)
+        #anatomy_img = self._prepare_image(entry['anatomy'], tof_dimensions)
 
         #use real tof data instead of the data encoded in the image since resize and image manipulations change the real TOF values
         tof_img = np.expand_dims(mat_data['raw_tof'], axis=0)
         return {
             'anatomy': anatomy_img,
+            'anatomy_sml': anatomy_img_sml,
             'tof': tof_img,
             'x_s': mat_data['x_s'],
             'x_r': mat_data['x_r'],

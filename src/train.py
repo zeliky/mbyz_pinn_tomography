@@ -30,6 +30,7 @@ class PINNTrainer:
         self.data_weight = kwargs.get('data_weight',  1e-4)
         self.pde_weight = kwargs.get('pde_weight',  1.0)
         self.bc_weight = kwargs.get('bc_weight',  1e-4)
+        self.scheduler_step_size= 2
 
     def train_model(self):
         train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
@@ -37,7 +38,7 @@ class PINNTrainer:
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
 
         num_epochs = self.epochs
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.scheduler_step_size, gamma=0.05)
         for epoch in range(self.epochs):
             self.training_step_handler.set_train_mode()
             epoch_loss = 0
@@ -114,13 +115,14 @@ class PINNTrainer:
 
 
     def visualize_predictions(self,  num_samples=5):
-        val_loader = DataLoader(self.val_dataset, batch_size=10, shuffle=False)
+        val_loader = DataLoader(self.val_dataset, batch_size=2, shuffle=False)
         self.model.eval()
         with torch.no_grad():
             count = 0
             for batch in val_loader:
                 tof = batch['tof'].float().to(self.device)
                 anatomy = batch['anatomy'].cpu()
+                #c_pred, t_pred = self.model(tof)
                 c_pred, t_pred = self.model(tof)
                 for i in range(c_pred.size(0)):
                     tof_np = tof[i].cpu().numpy()
@@ -131,7 +133,7 @@ class PINNTrainer:
                     # Plot anatomy and c_pred side by side
                     fig, axs = plt.subplots(1, 3, figsize=(8, 4))
 
-                    axs[0].imshow(tof_np.squeeze(0), cmap='gray')
+                    axs[0].imshow(tof_np.squeeze(0), cmap='jet')
                     axs[0].set_title('TOF')
                     axs[0].axis('off')
 
@@ -144,13 +146,15 @@ class PINNTrainer:
                     axs[2].set_title('Predicted SoS (c_pred)')
                     axs[2].axis('off')
 
-                    plt.tight_layout()
-                    plt.show()
+                    #plt.tight_layout()
+                    #plt.show()
                     log_image(fig)
                     log_message(' ')
                     count += 1
                     if count >= num_samples:
-                        break
+                        return
+
+
 
 
 def _bilinear_interpolate(tensor, coords):

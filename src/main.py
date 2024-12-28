@@ -63,11 +63,11 @@ def train_combined_model():
     epochs = 50
     trainer = PINNTrainer(model=CombinedSosTofModel(),
                           training_step_handler=CombinedSosTofTrainingStep(),
-                          batch_size=5,
+                          batch_size=3,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,
-                          lr=1e-5
+                          lr=1e-3
                           )
     if combined_checkpoint_path is not None:
         trainer.load_checkpoint(combined_checkpoint_path)
