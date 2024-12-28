@@ -63,7 +63,7 @@ def eikonal_loss(
     n_src = pred_tof.shape[0]
     for i in range(n_src):
         # pred_tof_i shape: [ 1, H, W]s
-        pred_tof_i = pred_tof[i : i+1, :, :]  # [  ..., H, W] in ms
+        pred_tof_i = pred_tof[i : i+1, :, :].squeeze()  # [  ..., H, W] in ms
 
         # T_ms = pred_tof_i * (T_max_ms - T_min_ms) + T_min_ms
         # t_s = T_ms * 1e-3  # [B, ..., H, W] in second
@@ -71,33 +71,32 @@ def eikonal_loss(
 
         #c_mm_us = sos_map * (c_max_mm_us - c_min_mm_us) + c_min_mm_us
         #c_m_s = c_mm_us * 1e3
-        c_m_s = _to_mps(sos_map)
+        c_m_s = _to_mps(sos_map.squeeze())
 
 
         # Finite differences --- change to torch.gradient
-        dx = t_s[ :, :, 1:] - t_s[:, :, :-1] / pixel_size_m   # [1,H,W-1]
-        dy = t_s[ :, 1:, :] - t_s[:, :-1, :] / pixel_size_m  # [1,H-1,W]
-        #dy, dx = torch.gradient(
-        #    t_s,
-        #    spacing=(pixel_size_m, pixel_size_m),
-        #    dim=(2, 3)
-        #)
+        #dx = t_s[ :, 1:] - t_s[ :, :-1] / pixel_size_m   # [1,H,W-1]
+        #dy = t_s[ 1:, :] - t_s[:-1, :] / pixel_size_m  # [1,H-1,W]
+        dy, dx = torch.gradient(
+            t_s,
+            spacing=(1.0, 1.0)
+        )
 
 
         # Crop them so shapes match for sqrt:
         #   dx has shape (1,H,W-1)
         #   dy has shape (1,H-1,W)
 
-        dx_cropped = dx[ :, :-1, :]    # [1,H-1,W-1]
-        dy_cropped = dy[  :, :, :-1]    # [1,H-1,W-1]
+        #dx_cropped = dx[ :, :-1, :]    # [1,H-1,W-1]
+        #dy_cropped = dy[  :, :, :-1]    # [1,H-1,W-1]
 
-        grad_mag = torch.sqrt(dx_cropped**2 + dy_cropped**2 + eps)  # [1,H-1,W-1]
+        grad_mag = torch.sqrt(dx**2 + dy**2 + eps)  # [1,H-1,W-1]
 
         # crop the sos map
-        sos_cropped = c_m_s[ :, : grad_mag.shape[1], : grad_mag.shape[2]] # => [1,H-1,W-1]
+        #sos_cropped = c_m_s[ :, : grad_mag.shape[1], : grad_mag.shape[2]] # => [1,H-1,W-1]
 
         # PDE residual = |grad T| - 1/c
-        residual = grad_mag - 1.0 / (sos_cropped + eps)
+        residual = grad_mag - 1.0 / (c_m_s + eps)
 
         pde_loss_i = torch.mean(residual**2)
         pde_losses.append(pde_loss_i)

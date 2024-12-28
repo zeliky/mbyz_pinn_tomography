@@ -67,7 +67,7 @@ def train_combined_model():
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,
-                          lr=1e-3
+                          lr=1e-4
                           )
     if combined_checkpoint_path is not None:
         trainer.load_checkpoint(combined_checkpoint_path)

@@ -38,7 +38,7 @@ class PINNTrainer:
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
 
         num_epochs = self.epochs
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.scheduler_step_size, gamma=0.05)
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.scheduler_step_size, gamma=0.1)
         for epoch in range(self.epochs):
             self.training_step_handler.set_train_mode()
             epoch_loss = 0
@@ -99,7 +99,7 @@ class PINNTrainer:
                 x_s = batch['x_s'].float()
                 x_r = batch['x_r'].float()
 
-                T_pred = self.model(input)
+                C_pred, T_pred = self.model(input)
                 known_tof = input.squeeze()
                 T_pred = T_pred.squeeze()
                 src_loc = (x_s.squeeze() * grid_h).int()
