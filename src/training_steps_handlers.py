@@ -68,6 +68,30 @@ class TofPredictorTrainingStep(BaseTrainingStep):
         #log_message(f"loss: {total_loss} ")
         return total_loss
 
+
+class CombinedSosTofTrainingStep(BaseTrainingStep):
+    def __init__(self, **kwargs):
+        super().__init__()
+
+    def perform_step(self, batch):
+        #tof_tensor = batch['tof'].to(self.device)
+
+        tof_tensor = batch['tof'].float().to(self.device)
+        sos_tensor = batch['anatomy'].to(self.device)
+        x_s = batch['x_s'].float()
+        x_r = batch['x_r'].float()
+
+        pred_sos, pred_tof = self.model(tof_tensor)
+        #print(pred_sos.shape)
+        #print(pred_tof.shape)
+        sos_loss = self.criterion(pred_sos, sos_tensor)
+
+        total_loss = sos_loss
+        log_message(f"loss: {total_loss} ")
+        return total_loss
+
+
+
 class TofPredictorTrainingStep_V1(BaseTrainingStep):
     def __init__(self, **kwargs):
         super().__init__()

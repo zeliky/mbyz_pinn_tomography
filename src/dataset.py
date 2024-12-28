@@ -62,16 +62,16 @@ class TofDataset(Dataset):
 
         # load images
         #tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
-        tof_img = self._prepare_image(entry['tof'], tof_dimensions)
+        #tof_img = self._prepare_image(entry['tof'], tof_dimensions)
         anatomy_img = self._prepare_image(entry['anatomy'], anatomy_dimensions)
 
+        #use real tof data instead of the data encoded in the image since resize and image manipulations change the real TOF values
+        tof_img = np.expand_dims(mat_data['raw_tof'], axis=0)
         return {
             'anatomy': anatomy_img,
             'tof': tof_img,
             'x_s': mat_data['x_s'],
             'x_r': mat_data['x_r'],
-            'x_o': mat_data['x_o'],
-            'raw_t_obs': mat_data['raw_t_obs']
         }
 
 
@@ -110,7 +110,7 @@ class TofDataset(Dataset):
            'x_s': source_positions,
            'x_r': receiver_positions,
            'x_o': known_tof,
-           'raw_t_obs' : tof_to_receivers
+           'raw_tof' : tof_to_receivers
         }
 
     def _prepare_image(self, path, dimensions):

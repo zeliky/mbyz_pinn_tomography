@@ -119,9 +119,9 @@ class PINNTrainer:
         with torch.no_grad():
             count = 0
             for batch in val_loader:
-                tof = batch['tof'].to(self.device)
+                tof = batch['tof'].float().to(self.device)
                 anatomy = batch['anatomy'].cpu()
-                c_pred = self.model(tof)
+                c_pred, t_pred = self.model(tof)
                 for i in range(c_pred.size(0)):
                     tof_np = tof[i].cpu().numpy()
                     anatomy_np = anatomy[i].numpy()
@@ -136,7 +136,7 @@ class PINNTrainer:
                     axs[0].axis('off')
 
 
-                    axs[1].imshow(anatomy_np.squeeze(0), cmap='gray')
+                    axs[1].imshow(anatomy_np.squeeze(0), cmap='jet')
                     axs[1].set_title('Original Anatomy')
                     axs[1].axis('off')
 

@@ -1,12 +1,12 @@
 
 from dataset import TofDataset
 from train import PINNTrainer
-from models.resnet_ltsm import TofToSosUNetModel
-from training_steps_handlers import TofToSosUNetTrainingStep
+from models.pinn_combined import CombinedSosTofModel
+from training_steps_handlers import   CombinedSosTofTrainingStep
 
-checkpoint_path = 'pinn_tof-sos_model.2tumors.pth'
-trainer = PINNTrainer(model=TofToSosUNetModel(),
-                        training_step_handler=TofToSosUNetTrainingStep(),
+checkpoint_path = 'pinn_tof-predictor_model.2024_12_28_10_15_31_378221-49.pth'
+trainer = PINNTrainer(model=CombinedSosTofModel(),
+                        training_step_handler=CombinedSosTofTrainingStep(),
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['test'])
     )

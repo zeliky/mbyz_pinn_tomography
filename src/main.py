@@ -4,15 +4,18 @@ from Terminal_and_HTML_Code.Terminal_and_HTML import terminal_html
 from report_dataset_info import report_dataset_info
 from dataset import TofDataset
 from train import PINNTrainer
-from models.resnet_ltsm import   TofPredictorModel
+from models.resnet_ltsm import   TofToSosUNetModel
 from models.pinn_unet import MultiSourceTOFModel
-from training_steps_handlers import TofToSosUNetTrainingStep, TofPredictorTrainingStep
+from models.pinn_combined import CombinedSosTofModel
+from training_steps_handlers import TofToSosUNetTrainingStep, TofPredictorTrainingStep, CombinedSosTofTrainingStep
 import os
 
 
-sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
+#sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
 #tof_checkpoint_path = 'pinn_tof-predictor_model.sources_only.pth'
+sos_checkpoint_path = None
 tof_checkpoint_path = None
+combined_checkpoint_path = None
 
 
 
@@ -56,18 +59,18 @@ def train_tof_predictor():
 
 
 def train_combined_model():
-    global checkpoint_path
+    global combined_checkpoint_path
     epochs = 50
-    trainer = PINNTrainer(model=TofToSosUNetModel(),
-                          training_step_handler=TofPredictorTrainingStep(),
-                          batch_size=1,
+    trainer = PINNTrainer(model=CombinedSosTofModel(),
+                          training_step_handler=CombinedSosTofTrainingStep(),
+                          batch_size=5,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,
                           lr=1e-5
                           )
-    if tof_checkpoint_path is not None:
-        trainer.load_checkpoint(checkpoint_path)
+    if combined_checkpoint_path is not None:
+        trainer.load_checkpoint(combined_checkpoint_path)
     trainer.train_model()
     log_message(' ')
 
@@ -81,7 +84,7 @@ if __name__ == "__main__":
     log_message("[main.py] Starting PINN training pipeline...")
 
     #train_sos_predictor()
-    train_tof_predictor()
-    #train_combined_model()
+    #train_tof_predictor()
+    train_combined_model()
 
 
