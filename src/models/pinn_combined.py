@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import segmentation_models_pytorch as smp
 from segmentation_models_pytorch.encoders import get_encoder
-from segmentation_models_pytorch.decoders import get_decoder
+
 from segmentation_models_pytorch.decoders.unet.decoder import UnetDecoder
 
 class CombinedSosTofModel(nn.Module):
