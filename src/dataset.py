@@ -1,5 +1,6 @@
 import os
 import re
+import math
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -69,12 +70,15 @@ class TofDataset(Dataset):
 
         #use real tof data instead of the data encoded in the image since resize and image manipulations change the real TOF values
         #tof_img = np.expand_dims(mat_data['raw_tof'], axis=0)
+        raw_tof = mat_data['raw_tof']
         return {
             'anatomy': anatomy_img,
             'anatomy_sml': anatomy_img_sml,
             'tof': tof_img,
+            'raw_tof': raw_tof,
             'x_s': mat_data['x_s'],
             'x_r': mat_data['x_r'],
+            'positions_mask': mat_data['positions_mask'],
         }
 
 
@@ -82,37 +86,30 @@ class TofDataset(Dataset):
         #log_message(f'loading mat file {path}')
         mat_data = loadmat(path)
 
-        xs_sources = np.array(mat_data['xs_sources'] / self.anatomy_height ).flatten()
-        ys_sources = np.array(mat_data['ys_sources'] / self.anatomy_width ).flatten()
+        xs_sources = np.array(np.round(mat_data['xs_sources'])  ).astype(int).flatten()
+        ys_sources = np.array(np.round(mat_data['ys_sources']) ).astype(int).flatten()
         source_positions = np.column_stack([xs_sources, ys_sources])  # [num_sources, 2]
 
-        xs_receivers = np.array(mat_data['xs_receivers'] / self.anatomy_height).flatten()
-        ys_receivers = np.array(mat_data['ys_receivers'] / self.anatomy_width ).flatten()
+        xs_receivers = np.array(np.round(mat_data['xs_receivers']) ).astype(int).flatten()
+        ys_receivers = np.array(np.round(mat_data['ys_receivers']) ).astype(int).flatten()
         receiver_positions = np.column_stack([xs_receivers, ys_receivers])  # [num_receivers, 2]
 
         tof_to_receivers = np.array((mat_data['t_obs'] / self.max_tof))  # [num_sources, num_receivers]
         num_sources = self.sources_amount
-        known_tof = []
-        # Initial conditions: source-to-source pairs
-        for i in range(num_sources):
-            xs_i, ys_i = source_positions[i]
-            # source to itself = 0
-            known_tof.append([xs_i, ys_i, xs_i, ys_i, 0.0])
+        num_receivers = self.receivers_amount
 
-        # Boundary conditions: source-to-receiver pairs
-        num_receivers = receiver_positions.shape[0]
-        for i in range(num_sources):
-            xs_i, ys_i = source_positions[i]
-            for j in range(num_receivers):
-                xr_j, yr_j = receiver_positions[j]
-                tof = tof_to_receivers[i, j]
-                known_tof.append([xs_i, ys_i, xr_j, yr_j, tof])
+        tof_mask = np.zeros([int(self.anatomy_width),int(self.anatomy_height)])
+        for j in range(num_receivers):
+            x, y = receiver_positions[j]
+            tof_mask[x-1, y-1] = 100+j
+        for j in range(num_sources):
+            x, y = source_positions[j]
+            tof_mask[x-1, y-1] = j
 
-        known_tof = np.array(known_tof)
         return {
            'x_s': source_positions,
            'x_r': receiver_positions,
-           'x_o': known_tof,
+           'positions_mask': tof_mask,
            'raw_tof' : tof_to_receivers
         }
 

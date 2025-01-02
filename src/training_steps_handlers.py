@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torch
-from physics import eikonal_loss, initial_loss, boundary_loss
+from physics import eikonal_loss, initial_loss, boundary_loss, boundary_loss
 from logger import log_message
 class BaseTrainingStep:
     def __init__(self):
@@ -76,21 +76,37 @@ class CombinedSosTofTrainingStep(BaseTrainingStep):
     def perform_step(self, batch):
         tof_tensor = batch['tof'].float().to(self.device)
         sos_tensor = batch['anatomy'].to(self.device)
+        positions_mask = batch['positions_mask'].float().to(self.device)
+        raw_tof = batch['raw_tof'].float().to(self.device)
+        sources_coords = batch['x_s'].to(self.device)
+        receivers_coords = batch['x_s'].to(self.device)
 
-        pred_sos, pred_tof= self.model(tof_tensor)
+
+        pred_sos, pred_tof= self.model(tof_tensor, positions_mask)
 
         mse_loss = self.criterion(pred_sos, sos_tensor)
 
         total_pde = 0
+        total_bc = 0
         c=0
         for idx, pred in enumerate(pred_tof):
             c += 1
-            pde_loss =  eikonal_loss(pred, pred_sos[idx])
+            pde_loss = eikonal_loss(pred, pred_sos[idx])
+            #pde_loss = eikonal_loss(pred, sos_tensor[idx])
             total_pde += pde_loss
-            #log_message(f"mse_loss: {mse_loss} p_pde_loss: {pde_loss} ")
-        
-        total_loss = mse_loss + 1e3*total_pde/c
-        log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde}")
+
+            bc_loss = boundary_loss(pred,  raw_tof[idx], positions_mask[idx])
+            #bc_loss = boundary_loss(pred,  raw_tof[idx], sources_coords[idx], receivers_coords[idx] )
+
+            total_bc += bc_loss
+
+        aw = 1e-2
+        bw = 1
+        cw = 1e-2
+        total_loss = aw*mse_loss +  bw*total_pde + cw*total_bc
+        #log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
+        log_message(f"total_loss:{total_loss} mse_loss: {aw*mse_loss} pde_loss:{bw*total_pde} bc_loss:{cw*total_bc}")
+
 
         return total_loss
 

@@ -14,6 +14,8 @@ class AppSettings:
     min_tof: float=0.0
     max_tof: float=100.0
     pixel_to_mm = 1e-3
+    sources_amount = 32
+    receivers_amount = 32
 
 
 
