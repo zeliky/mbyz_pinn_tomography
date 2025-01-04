@@ -96,14 +96,17 @@ class PINNTrainer:
         with torch.no_grad():
             for batch in val_loader:
                 input = batch['tof'].float().to(self.device)
+                positions_mask = batch['positions_mask'].float().to(self.device)
                 x_s = batch['x_s'].float()
                 x_r = batch['x_r'].float()
 
-                C_pred, T_pred = self.model(input)
+                C_pred, T_pred = self.model(input, positions_mask)
+                print(C_pred[0].tolist())
+                exit()
                 known_tof = input.squeeze()
                 T_pred = T_pred.squeeze()
-                src_loc = (x_s.squeeze() * grid_h).int()
-                rec_loc = (x_r.squeeze() * grid_w).int()
+                src_loc = (x_s.squeeze() ).int()
+                rec_loc = (x_r.squeeze() ).int()
 
                 for s_idx, s in enumerate(src_loc):
                     p_tof = T_pred[s_idx, s[0], s[1]]

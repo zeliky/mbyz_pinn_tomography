@@ -1,6 +1,7 @@
 class AppSettings:
     output_folder: str = "../myOutputs/"
     input_folder: str = "../inputData"
+
     cached_dataset: str = 'train_validation.pcl'
     train_path: str = f'{input_folder}/ForLearning/'
     validation_path: str = f'{input_folder}/ForValidation/'
@@ -17,6 +18,8 @@ class AppSettings:
     sources_amount = 32
     receivers_amount = 32
 
+    no_anatomy_mat: str = "../shared/tof_noAnatomy.mat"
+    no_anatomy_img: str = "../shared/tof_noAnatomy.png"
 
 
 app_settings = AppSettings()

@@ -44,6 +44,7 @@ class TofDataset(Dataset):
         self.x_o_list = []
 
         self._build_files_index(self.modes)
+        self.empty_tof = self._prepare_image(app_settings.no_anatomy_img, (int(self.anatomy_height), int(self.anatomy_width)) )
 
     @staticmethod
     def load_dataset(source_file):
@@ -62,7 +63,7 @@ class TofDataset(Dataset):
         mat_data = self._prepare_mat_data( entry['mat'])
 
         # load images
-        tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
+        tof_img = self.empty_tof - self._prepare_image(entry['tof'], anatomy_dimensions)
         #tof_img = self._prepare_image(entry['tof'], tof_dimensions)
         anatomy_img = self._prepare_image(entry['anatomy'], anatomy_dimensions)
         anatomy_img_sml = self._prepare_image(entry['anatomy'], tof_dimensions)
@@ -119,8 +120,10 @@ class TofDataset(Dataset):
             transforms.Grayscale(num_output_channels=1),
             transforms.ToTensor()
         ])
+
         img = Image.open(path)
         image_tensor = transform(img)  # [1,H,W], normalized to [0,1]
+        image_tensor = image_tensor
         return image_tensor
 
     def _build_files_index(self, modes):
@@ -144,6 +147,9 @@ class TofDataset(Dataset):
         for i,v in enumerate(self.file_index.values()):
             index[i] = v
         self.files_index = index
+
+        self.empty_tof = self._prepare_image(app_settings.no_anatomy_img,
+                                             (int(self.anatomy_height), int(self.anatomy_width)))
 
     def _build_mat_files_index(self):
         pattern = re.compile(r'ToF(.*)_(\d+)\.mat')

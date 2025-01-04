@@ -100,11 +100,11 @@ class CombinedSosTofTrainingStep(BaseTrainingStep):
 
             total_bc += bc_loss
 
-        aw = 1e-2
-        bw = 1
-        cw = 1e-2
+        aw = 0#1e3
+        bw = 0#1e3
+        cw = 1e1
         total_loss = aw*mse_loss +  bw*total_pde + cw*total_bc
-        #log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
+        log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
         log_message(f"total_loss:{total_loss} mse_loss: {aw*mse_loss} pde_loss:{bw*total_pde} bc_loss:{cw*total_bc}")
 
 
