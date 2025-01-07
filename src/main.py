@@ -9,10 +9,11 @@ from models.pinn_unet import MultiSourceTOFModel
 from models.pinn_combined import CombinedSosTofModel
 from training_steps_handlers import TofToSosUNetTrainingStep, TofPredictorTrainingStep, CombinedSosTofTrainingStep
 import os
-
+from models.eikonal_solver import EikonalSolverMultiLayer
 
 #sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
 #tof_checkpoint_path = 'pinn_tof-predictor_model.sources_only.pth'
+#sos_checkpoint_path = '__pretarained-resnet.pth'
 sos_checkpoint_path = None
 tof_checkpoint_path = None
 combined_checkpoint_path = None
@@ -22,13 +23,15 @@ combined_checkpoint_path = None
 def train_sos_predictor():
     global sos_checkpoint_path
     epochs = 50
+    solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
+    solver.to('cuda')
     trainer = PINNTrainer(model=TofToSosUNetModel(),
-                          training_step_handler=TofToSosUNetTrainingStep(),
-                          batch_size=2,
+                          training_step_handler=TofToSosUNetTrainingStep(solver),
+                          batch_size=1,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,
-                          lr=1e-5
+                          lr=1e-3
                           )
     if sos_checkpoint_path is not None:
         trainer.load_checkpoint(sos_checkpoint_path)
@@ -83,8 +86,8 @@ if __name__ == "__main__":
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     log_message("[main.py] Starting PINN training pipeline...")
 
-    #train_sos_predictor()
+    train_sos_predictor()
     #train_tof_predictor()
-    train_combined_model()
+    #train_combined_model()
 
 

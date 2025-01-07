@@ -30,7 +30,7 @@ class PINNTrainer:
         self.data_weight = kwargs.get('data_weight',  1e-4)
         self.pde_weight = kwargs.get('pde_weight',  1.0)
         self.bc_weight = kwargs.get('bc_weight',  1e-4)
-        self.scheduler_step_size= 2
+        self.scheduler_step_size= 4
 
     def train_model(self):
         train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
@@ -125,9 +125,10 @@ class PINNTrainer:
             for batch in val_loader:
                 tof = batch['tof'].float().to(self.device)
                 anatomy = batch['anatomy'].cpu()
-                positions_mask = batch['positions_mask'].float().to(self.device)
+                #positions_mask = batch['positions_mask'].float().to(self.device)
                 #c_pred, t_pred = self.model(tof)
-                c_pred, t_pred = self.model(tof, positions_mask)
+                #c_pred, t_pred = self.model(tof, positions_mask)
+                c_pred, t_pred = self.model(tof)
                 for i in range(c_pred.size(0)):
                     tof_np = tof[i].cpu().numpy()
                     anatomy_np = anatomy[i].numpy()
@@ -146,7 +147,8 @@ class PINNTrainer:
                     axs[1].set_title('Original Anatomy')
                     axs[1].axis('off')
 
-                    axs[2].imshow(c_pred_np.squeeze(0), cmap='jet')
+                    #axs[2].imshow(c_pred_np.squeeze(0), cmap='jet')
+                    axs[2].imshow(c_pred_np, cmap='jet')
                     axs[2].set_title('Predicted SoS (c_pred)')
                     axs[2].axis('off')
 

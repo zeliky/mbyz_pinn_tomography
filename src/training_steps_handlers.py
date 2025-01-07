@@ -1,7 +1,8 @@
 import torch.nn as nn
 import torch
-from physics import eikonal_loss, initial_loss, boundary_loss, boundary_loss
+from physics import eikonal_loss_multi, eikonal_loss, initial_loss, boundary_loss, boundary_loss
 from logger import log_message
+import random
 class BaseTrainingStep:
     def __init__(self):
         self.model = None
@@ -24,16 +25,38 @@ class BaseTrainingStep:
 
 
 class TofToSosUNetTrainingStep(BaseTrainingStep):
-    def __init__(self):
+    def __init__(self, solver):
         super().__init__()
+        self.solver = solver
 
 
     def perform_step(self, batch):
         tof_tensor = batch['tof'].to(self.device)
         sos_tensor = batch['anatomy'].to(self.device)
+        sources = batch['x_s'].to(self.device)
         sos_pred = self.model(tof_tensor)
-        loss = self.criterion(sos_pred, sos_tensor)
-        return loss
+        mse_loss = self.criterion(sos_pred, sos_tensor)
+        pde_loss = 0.0
+        k_count = 5
+        selected_sources = random.choices(sources[0].squeeze(),k=k_count)
+        #print(selected_sources)
+
+        for src in selected_sources:
+            s = (int(src[0]), int(src[1]))
+            pde_loss += eikonal_loss_multi(sos_pred, self.solver, s, roi_start=20, roi_end=100, eps=1e-8)
+        pde_loss/=k_count
+        """
+        for sos_pred in sos_preds:
+            for src in sources[0].squeeze():
+                s = (int(src[0]), int(src[1]))
+                print(s)
+                print('------------')
+                pde_loss = eikonal_loss_multi(sos_pred.squeeze(), self.solver, s, roi_start=30, roi_end=90, eps=1e-8)
+                print(pde_loss)
+        """
+        total_loss = mse_loss + 1e5* pde_loss
+        log_message(f"total_loss: {total_loss} mse_loss: {mse_loss} pde_loss: {pde_loss}")
+        return total_loss
 
 class TofPredictorTrainingStep(BaseTrainingStep):
     def __init__(self, **kwargs):

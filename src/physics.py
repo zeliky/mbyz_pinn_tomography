@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from settings import app_settings
 
 
+
 def _to_sec(v):
     t_min_ms = app_settings.min_tof   # in milliseconds
     t_max_ms = app_settings.max_tof   # in milliseconds
@@ -17,7 +18,7 @@ def _to_mps(v):
     c_max_mm_us = app_settings.max_sos   # in mm/us
 
     c_mm_us = v * (c_max_mm_us - c_min_mm_us) + c_min_mm_us
-    c_m_s = c_mm_us * 1e3
+    c_m_s = c_mm_us * 1e4
     return c_m_s
 
 
@@ -32,17 +33,119 @@ def initial_loss(pred_tof, src_loc):
     return loss / c
 
 
-def boundary_loss_v1(pred_tof, known_tof, src_loc, rec_loc):
-    loss = 0.0
-    c = 0
-    for s_idx, s in enumerate(src_loc):
-        for r_idx, r in enumerate(rec_loc):
-            k_tof = _to_sec(known_tof[s_idx, r_idx]) # known tof (obs)
-            p_tof = _to_sec(pred_tof[s_idx, r[0], r[1]])  # predicted tof on s layer, receiver position
-            # print(f"{k_tof - p_tof}")
-            loss += torch.pow(k_tof-p_tof, 2)  # compare to original tof
-            c += 1
-    return loss / c
+
+
+
+def boundary_loss(sos_pred, known_tof, num_samples=7):
+    total_loss = 0.0
+    sos_pred.requires_grad_(True)
+    eps = 1e-8
+
+    center_t = torch.linspace(0.4, 0.6, num_samples-2, device=sos_pred.device)
+    t = torch.cat([torch.tensor([0.0], device=sos_pred.device), center_t, torch.tensor([0.99], device=sos_pred.device)])
+
+    for x_s, y_s, x_r, y_r, tof in known_tof:
+        # Sample points along a straight line (approximation)
+
+        x_path = x_s + t * (x_r - x_s)
+        y_path = y_s + t * (y_r - y_s)
+
+        #interpolate speed of sound on selected points on the selected line
+        sos_path = bilinear_interpolate(sos_pred, x_path, y_path)
+        sos_path = _to_mps(sos_path)
+        # length of each part (between points)
+        dx = x_path[1:] - x_path[:-1]
+        dy = y_path[1:] - y_path[:-1]
+        ds = torch.sqrt(dx ** 2 + dy ** 2)
+
+        # Compute predicted ToF
+        tof_pred = torch.sum(ds / (sos_path[:-1]+eps))  # Trapezoidal rule approximation
+        #print(f"({x_s}, {y_s}) - ({x_r}, {y_r}) t:{tof}-p:{tof_pred})")
+
+        # Accumulate boundary loss
+        total_loss += (tof - tof_pred) ** 2
+    return total_loss / len(known_tof)
+
+
+def eikonal_loss_multi(sos_pred, solver, source, roi_start=40, roi_end=80, eps=1e-8):
+    """
+    Eikonal loss with multi-layer solver.
+    Parameters:
+        sos_pred: Tensor of shape (1, 1, H, W) - Predicted speed of sound.
+        solver: EikonalSolverMultiLayer - Multi-layer solver network.
+        source: Tuple (x, y) - Source location.
+        roi_start: Int - Start index of the ROI.
+        roi_end: Int - End index of the ROI.
+        eps: float - Small value to avoid division by zero.
+    Returns:
+        torch.Tensor: Eikonal loss.
+    """
+    sos_pred = _to_mps(sos_pred)
+    H, W = app_settings.anatomy_height , app_settings.anatomy_width
+
+    # Initialize travel time field
+    T_init = torch.full((1, 1, H, W), 1e18, device=sos_pred.device)
+    T_init[0, 0, source[0], source[1]] = 0  # Source at zero
+
+
+    #print(f"T_init source value at ({source[0]},{source[1]})  :{T_init[0, 0, source[0], source[1]].item()}")
+    #print(f"T_init minimum value location: {torch.argmin(T_init.view(-1)).item()}")
+
+    # Propagate travel time using multi-layer solver
+    T = solver(T_init, sos_pred)
+
+    T = _to_sec(T)
+    #print(f"T minimum value location: {torch.argmin(T.view(-1)).item()}")
+    #print(f"T Maximum value location: {torch.argmax(T.view(-1)).item()}")
+    # print(T.tolist())
+
+
+    # Compute gradients of travel time
+    grad_x = (T[:, :, 2:, 1:-1] - T[:, :, :-2, 1:-1]) / 2  # Central difference
+    grad_y = (T[:, :, 1:-1, 2:] - T[:, :, 1:-1, :-2]) / 2
+
+    grad_mag = torch.sqrt(grad_x**2 + grad_y**2)
+
+
+    # Clip SoS to avoid division by zero
+    grad_mag_roi = grad_mag[:, :, roi_start - 1:roi_end - 1, roi_start - 1:roi_end - 1]
+    sos_clipped = sos_pred[:, :, roi_start:roi_end, roi_start:roi_end].clamp(min=eps)
+
+    # Eikonal loss
+    loss = torch.mean((grad_mag_roi - 1.0 / sos_clipped) ** 2)
+    #loss = torch.sum((grad_mag_roi - 1.0 / sos_clipped) ** 2)
+    return loss
+
+
+
+
+
+def bilinear_interpolate(grid, x, y):
+    x0 = torch.floor(x).long()
+    x1 = x0 + 1
+    y0 = torch.floor(y).long()
+    y1 = y0 + 1
+
+    x0 = torch.clamp(x0, 0, grid.size(0) - 1)
+    x1 = torch.clamp(x1, 0, grid.size(0) - 1)
+    y0 = torch.clamp(y0, 0, grid.size(1) - 1)
+    y1 = torch.clamp(y1, 0, grid.size(1) - 1)
+
+    Ia = grid[x0, y0]
+    Ib = grid[x0, y1]
+    Ic = grid[x1, y0]
+    Id = grid[x1, y1]
+
+    wa = (x1.float() - x) * (y1.float() - y)
+    wb = (x1.float() - x) * (y - y0.float())
+    wc = (x - x0.float()) * (y1.float() - y)
+    wd = (x - x0.float()) * (y - y0.float())
+
+    return wa * Ia + wb * Ib + wc * Ic + wd * Id
+
+#--------------------- BACK UP - DONT USE ! --------------------------------------------------------------------------------
+
+
 
 def eikonal_loss(
         pred_tof,  # [B, ..., H, W]
@@ -104,6 +207,18 @@ def eikonal_loss(
     # Sum or average PDE loss across all sources
 
     return sum(pde_losses) / n_src
+def boundary_loss_v1(pred_tof, known_tof, src_loc, rec_loc):
+    loss = 0.0
+    c = 0
+    for s_idx, s in enumerate(src_loc):
+        for r_idx, r in enumerate(rec_loc):
+            k_tof = _to_sec(known_tof[s_idx, r_idx]) # known tof (obs)
+            p_tof = _to_sec(pred_tof[s_idx, r[0], r[1]])  # predicted tof on s layer, receiver position
+            # print(f"{k_tof - p_tof}")
+            loss += torch.pow(k_tof-p_tof, 2)  # compare to original tof
+            c += 1
+    return loss / c
+
 
 
 def boundary_loss_v2(pred_tof, known_tof, positions_mask):
@@ -151,7 +266,7 @@ def boundary_loss_v2(pred_tof, known_tof, positions_mask):
 
 
 
-def boundary_loss(pred_tof, known_tof, positions_mask):
+def boundary_loss_v3(pred_tof, known_tof, positions_mask):
     """
     pred_tof:    (S, H, W)  => predicted TOF for each of S sources
     known_tof:   (S, R)     => known/measured TOF for source s to receiver r

@@ -63,27 +63,61 @@ class TofDataset(Dataset):
         mat_data = self._prepare_mat_data( entry['mat'])
 
         # load images
-        tof_img = self.empty_tof - self._prepare_image(entry['tof'], anatomy_dimensions)
+        #tof_img = self.empty_tof - self._prepare_image(entry['tof'], anatomy_dimensions)
+        tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
         #tof_img = self._prepare_image(entry['tof'], tof_dimensions)
         anatomy_img = self._prepare_image(entry['anatomy'], anatomy_dimensions)
-        anatomy_img_sml = self._prepare_image(entry['anatomy'], tof_dimensions)
+        #anatomy_img_sml = self._prepare_image(entry['anatomy'], tof_dimensions)
         #anatomy_img = self._prepare_image(entry['anatomy'], tof_dimensions)
 
         #use real tof data instead of the data encoded in the image since resize and image manipulations change the real TOF values
         #tof_img = np.expand_dims(mat_data['raw_tof'], axis=0)
-        raw_tof = mat_data['raw_tof']
+        #raw_tof = mat_data['raw_tof']
+
+        known_tof = mat_data['known_tof']
         return {
             'anatomy': anatomy_img,
-            'anatomy_sml': anatomy_img_sml,
+            #'anatomy_sml': anatomy_img_sml,
             'tof': tof_img,
-            'raw_tof': raw_tof,
+            'known_tof': known_tof,
             'x_s': mat_data['x_s'],
-            'x_r': mat_data['x_r'],
-            'positions_mask': mat_data['positions_mask'],
+            #'x_r': mat_data['x_r'],
+            #'positions_mask': mat_data['positions_mask'],
+        }
+
+    def _prepare_mat_data(self, path):
+        #log_message(f'loading mat file {path}')
+        mat_data = loadmat(path)
+
+        xs_sources = np.array(np.round(mat_data['xs_sources'])  ).flatten()
+        ys_sources = np.array(np.round(mat_data['ys_sources']) ).flatten()
+        source_positions = np.column_stack([xs_sources, ys_sources])  # [num_sources, 2]
+
+        xs_receivers = np.array(np.round(mat_data['xs_receivers']) ).flatten()
+        ys_receivers = np.array(np.round(mat_data['ys_receivers']) ).flatten()
+        receiver_positions = np.column_stack([xs_receivers, ys_receivers])  # [num_receivers, 2]
+
+        tof_to_receivers = np.array((mat_data['t_obs']))  # [num_sources, num_receivers]
+
+
+        known_tof = []
+        for s in range(self.sources_amount):
+            sx, sy = source_positions[s]
+            #known_tof.append([sx, sy, sx, sy, 0.0])
+            for r in range(self.receivers_amount):
+                rx, ry = receiver_positions[r]
+                known_tof.append([sx, sy, rx, ry, tof_to_receivers[s, r]/self.max_tof])
+        known_tof = np.array(known_tof)
+
+        return {
+           'x_s': source_positions,
+           'x_r': receiver_positions,
+           'known_tof': known_tof,
         }
 
 
-    def _prepare_mat_data(self, path):
+
+    def FFFFF_prepare_mat_data(self, path):
         #log_message(f'loading mat file {path}')
         mat_data = loadmat(path)
 
@@ -245,3 +279,24 @@ class TofDataset(Dataset):
                 receiver_y = ys_receivers[receiver_idx]
                 mask[source_idx, receiver_y, receiver_x] = True
         return mask
+
+    def _create_known_tof(self, mat_data):
+        xs_sources = np.array(np.round(mat_data['xs_sources'])).flatten()
+        ys_sources = np.array(np.round(mat_data['ys_sources'])).flatten()
+        source_positions = np.column_stack([xs_sources, ys_sources])  # [num_sources, 2]
+
+        xs_receivers = np.array(np.round(mat_data['xs_receivers'])).flatten()
+        ys_receivers = np.array(np.round(mat_data['ys_receivers'])).flatten()
+        receiver_positions = np.column_stack([xs_receivers, ys_receivers])  # [num_receivers, 2]
+        tof_to_receivers = np.array((mat_data['t_obs']))  # [num_sources, num_receivers]
+
+        known_tof = []
+        for s in range(self.sources_amount):
+            sx, sy = source_positions[s]
+            known_tof.append([sx, sy, sx, sy , 0.0])
+            for r in range(self.receivers_amount):
+                rx, ry = receiver_positions[r]
+                known_tof.append([sx, sy, rx, ry , tof_to_receivers[s,r]])
+        print(known_tof)
+
+
