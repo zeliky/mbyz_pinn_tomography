@@ -25,7 +25,7 @@ def train_sos_predictor():
     global sos_checkpoint_path
     epochs = 2
     solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
-    solver.to('cuda')
+    solver.to('cpu')
     trainer = PINNTrainer(model=TofToSosUNetModel(),
                           training_step_handler=TofToSosUNetTrainingStep(solver),
                           batch_size=1,
@@ -90,9 +90,9 @@ if __name__ == "__main__":
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     log_message("[main.py] Starting PINN training pipeline...")
     print('started')
-    #train_sos_predictor()
+    train_sos_predictor()
     #train_tof_predictor()
-    train_combined_model()
+    #train_combined_model()
     # Measure time
     et = time.process_time()
     res = et - st

@@ -243,9 +243,10 @@ class PINNTrainer:
             for batch in val_loader:
                 tof = batch['tof'].float().to(self.device)
                 anatomy = batch['anatomy'].cpu()
-                positions_mask = batch['positions_mask'].float().to(self.device)
+                #positions_mask = batch['positions_mask'].float().to(self.device)
                 #c_pred, t_pred = self.model(tof)
-                c_pred, t_pred = self.model(tof, positions_mask)
+                #c_pred, t_pred = self.model(tof, positions_mask)
+                c_pred = self.model(tof)
                 for i in range(c_pred.size(0)):
                     tof_np = tof[i].cpu().numpy()
                     anatomy_np = anatomy[i].numpy()

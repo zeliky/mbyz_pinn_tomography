@@ -54,9 +54,17 @@ class TofToSosUNetTrainingStep(BaseTrainingStep):
                 pde_loss = eikonal_loss_multi(sos_pred.squeeze(), self.solver, s, roi_start=30, roi_end=90, eps=1e-8)
                 print(pde_loss)
         """
-        total_loss = mse_loss + 1e5* pde_loss
-        log_message(f"total_loss: {total_loss} mse_loss: {mse_loss} pde_loss: {pde_loss}")
-        return total_loss
+        aw = 1
+        bw = 1e5
+
+        total_loss = aw*mse_loss +  bw*pde_loss
+        #log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
+        log_message(f"total_loss: {total_loss:.4e} ... mse_loss: {aw*mse_loss:.4e} ... pde_loss: {bw*pde_loss:.4e}")
+        weighted_mse_loss = aw*mse_loss
+        weighted_pde_loss = bw*pde_loss
+        weighted_bc_loss = 0
+        #return total_loss
+        return total_loss, weighted_mse_loss, weighted_pde_loss, weighted_bc_loss
 
 class TofPredictorTrainingStep(BaseTrainingStep):
     def __init__(self, **kwargs):
