@@ -65,7 +65,6 @@ class TofPredictorTrainingStep(BaseTrainingStep):
         self.grid_h = kwargs.get('grid_h',128)
 
     def perform_step(self, batch):
-
         tof_tensor = batch['tof'].to(self.device)
         sos_tensor = batch['anatomy'].to(self.device)
         x_s = batch['x_s'].float()
@@ -123,15 +122,17 @@ class CombinedSosTofTrainingStep(BaseTrainingStep):
 
             total_bc += bc_loss
 
-        aw = 0#1e3
-        bw = 0#1e3
-        cw = 1e1
+        aw = 1e-2
+        bw = 1
+        cw = 1e-2
         total_loss = aw*mse_loss +  bw*total_pde + cw*total_bc
-        log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
-        log_message(f"total_loss:{total_loss} mse_loss: {aw*mse_loss} pde_loss:{bw*total_pde} bc_loss:{cw*total_bc}")
-
-
-        return total_loss
+        #log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
+        log_message(f"total_loss: {total_loss:.4e} ... mse_loss: {aw*mse_loss:.4e} ... pde_loss: {bw*total_pde:.4e} ... bc_loss: {cw*total_bc:.4e}")
+        weighted_mse_loss = aw*mse_loss
+        weighted_pde_loss = bw*total_pde
+        weighted_bc_loss = cw*total_bc
+        #return total_loss
+        return total_loss, weighted_mse_loss, weighted_pde_loss, weighted_bc_loss
 
 
 

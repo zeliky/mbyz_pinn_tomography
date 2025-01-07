@@ -30,7 +30,7 @@ class PINNTrainer:
         self.data_weight = kwargs.get('data_weight',  1e-4)
         self.pde_weight = kwargs.get('pde_weight',  1.0)
         self.bc_weight = kwargs.get('bc_weight',  1e-4)
-        self.scheduler_step_size= 2
+        self.scheduler_step_size= 4
         
         self.epochs_vec= [] # for visualization
         self.epoch_loss_vec = [] # for visualization
