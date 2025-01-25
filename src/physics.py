@@ -2,36 +2,8 @@ import torch
 import math
 import torch.nn.functional as F
 from settings import app_settings
-from models.eikonal_solver import EikonalSolverMultiLayer, DifferentiableSolver
-import torch
 
 
-
-
-
-class Solver:
-    def __init__(self, **kwargs):
-
-        self.solver = DifferentiableSolver()
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.solver.to(device)
-
-    def tof_domain(self, sos, sources,receivers):
-        batch_size, _, grid_x, grid_y = sos.shape
-        tof = self.solver(sos, sources, receivers)
-
-        """
-        for b in range(batch_size):
-            print(f"arrival time at source ({source[0]},{source[1]})  :{arrival_times[b , source[0], source[1]].item()}")
-            for rec_idx, rec in enumerate(receivers):
-                print(f"tof value for ({rec_idx})  :{tof[b, rec_idx].item()}")
-                print(f"arrival time at ({rec[0]},{rec[1]})  :{arrival_times[b, rec[0], rec[1]].item()}")
-            print(f"arrival time maximum value : {torch.max(arrival_times).item()}")
-            print(f"arrival time minimum value : {torch.min(arrival_times).item()}")
-
-            print(f"T average : {torch.mean(arrival_times).item()}")
-        """
-        return tof
 
 def _to_sec(v):
     t_min_ms = app_settings.min_tof   # in milliseconds
@@ -48,9 +20,6 @@ def _to_mps(v):
     c_mm_us = v * (c_max_mm_us - c_min_mm_us) + c_min_mm_us
     c_m_s = c_mm_us * 1e4
     return c_m_s
-
-def _to_m(v):
-    return v*1e-3
 
 
 def initial_loss(pred_tof, src_loc):
@@ -98,7 +67,7 @@ def boundary_loss(sos_pred, known_tof, num_samples=7):
     return total_loss / len(known_tof)
 
 
-def eikonal_loss_multi(sos_pred, T, roi_start=30, roi_end=90, eps=1e-8):
+def eikonal_loss_multi(sos_pred, solver, source, roi_start=40, roi_end=80, eps=1e-8):
     """
     Eikonal loss with multi-layer solver.
     Parameters:
@@ -111,14 +80,24 @@ def eikonal_loss_multi(sos_pred, T, roi_start=30, roi_end=90, eps=1e-8):
     Returns:
         torch.Tensor: Eikonal loss.
     """
-
-
-    #print(f"T minimum value location: {torch.argmin(T_init.view(-1)).item()}")
-    #print(f"T Maximum value location: {torch.argmax(T_init.view(-1)).item()}")
-    #print(f"T maximum value : {torch.max(T).item()}")
-    #print(f"T average : {torch.mean(T).item()}")
-    #
     sos_pred = _to_mps(sos_pred)
+    H, W = app_settings.anatomy_height , app_settings.anatomy_width
+
+    # Initialize travel time field
+    T_init = torch.full((1, 1, H, W), 1e18, device=sos_pred.device)
+    T_init[0, 0, source[0], source[1]] = 0  # Source at zero
+
+
+    #print(f"T_init source value at ({source[0]},{source[1]})  :{T_init[0, 0, source[0], source[1]].item()}")
+    #print(f"T_init minimum value location: {torch.argmin(T_init.view(-1)).item()}")
+
+    # Propagate travel time using multi-layer solver
+    T = solver(T_init, sos_pred)
+
+    T = _to_sec(T)
+    #print(f"T minimum value location: {torch.argmin(T.view(-1)).item()}")
+    #print(f"T Maximum value location: {torch.argmax(T.view(-1)).item()}")
+    # print(T.tolist())
 
 
     # Compute gradients of travel time
@@ -126,6 +105,7 @@ def eikonal_loss_multi(sos_pred, T, roi_start=30, roi_end=90, eps=1e-8):
     grad_y = (T[:, :, 1:-1, 2:] - T[:, :, 1:-1, :-2]) / 2
 
     grad_mag = torch.sqrt(grad_x**2 + grad_y**2)
+
 
     # Clip SoS to avoid division by zero
     grad_mag_roi = grad_mag[:, :, roi_start - 1:roi_end - 1, roi_start - 1:roi_end - 1]
@@ -135,7 +115,6 @@ def eikonal_loss_multi(sos_pred, T, roi_start=30, roi_end=90, eps=1e-8):
     loss = torch.mean((grad_mag_roi - 1.0 / sos_clipped) ** 2)
     #loss = torch.sum((grad_mag_roi - 1.0 / sos_clipped) ** 2)
     return loss
-
 
 
 
