@@ -1,5 +1,5 @@
 from logger import log_message
-
+import torch
 from Terminal_and_HTML_Code.Terminal_and_HTML import terminal_html
 from report_dataset_info import report_dataset_info
 from dataset import TofDataset
@@ -15,7 +15,7 @@ from models.eikonal_solver import EikonalSolverMultiLayer
 
 #sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
 #tof_checkpoint_path = 'pinn_tof-predictor_model.sources_only.pth'
-sos_checkpoint_path = None
+sos_checkpoint_path = 'pinn_tof-predictor_model.pth'
 tof_checkpoint_path = None
 combined_checkpoint_path = None
 
@@ -23,11 +23,9 @@ combined_checkpoint_path = None
 
 def train_sos_predictor():
     global sos_checkpoint_path
-    epochs = 2
-    solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
-    solver.to('cpu')
+    epochs = 5
     trainer = PINNTrainer(model=TofToSosUNetModel(),
-                          training_step_handler=TofToSosUNetTrainingStep(solver),
+                          training_step_handler=TofToSosUNetTrainingStep(),
                           batch_size=1,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),

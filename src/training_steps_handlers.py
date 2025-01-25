@@ -1,8 +1,10 @@
 import torch.nn as nn
 import torch
-from physics import eikonal_loss_multi, eikonal_loss, initial_loss, boundary_loss, boundary_loss
+from physics import Solver, eikonal_loss_multi, eikonal_loss, initial_loss, boundary_loss,_to_mps
 from logger import log_message
 import random
+
+
 class BaseTrainingStep:
     def __init__(self):
         self.model = None
@@ -25,37 +27,50 @@ class BaseTrainingStep:
 
 
 class TofToSosUNetTrainingStep(BaseTrainingStep):
-    def __init__(self, solver):
+    def __init__(self):
         super().__init__()
-        self.solver = solver
+        self.solver = Solver()
 
 
     def perform_step(self, batch):
         tof_tensor = batch['tof'].to(self.device)
         sos_tensor = batch['anatomy'].to(self.device)
         sources = batch['x_s'].to(self.device)
+        receivers = batch['x_r'].to(self.device)
+
         sos_pred = self.model(tof_tensor)
-        mse_loss = self.criterion(sos_pred, sos_tensor)
+        mse_loss_all = self.criterion(sos_pred, sos_tensor)
+
+        roi_start = 50
+        roi_end = 70
+        eps = 1e-8
+        pred_sos_clipped = sos_pred[:, :, roi_start:roi_end, roi_start:roi_end].clamp(min=eps)
+        sos_true_clipped = sos_tensor[:, :, roi_start:roi_end, roi_start:roi_end].clamp(min=eps)
+        mse_loss_roi = self.criterion(pred_sos_clipped, sos_true_clipped)
+        mse_loss = mse_loss_all + 2*mse_loss_roi
+
+
         pde_loss = 0.0
-        k_count = 5
+        k_count = 32
         selected_sources = random.choices(sources[0].squeeze(),k=k_count)
         #print(selected_sources)
 
+        rec_tuples = []
+        for rec in receivers[0].squeeze():
+            rec_tuples.append((int(rec[0])-1, int(rec[1])-1))
+
         for src in selected_sources:
-            s = (int(src[0]), int(src[1]))
-            pde_loss += eikonal_loss_multi(sos_pred, self.solver, s, roi_start=20, roi_end=100, eps=1e-8)
+            s = (int(src[0])-1, int(src[1])-1)
+
+            arrival_times, tof = self.solver.tof_domain(sos=sos_pred, source=s, receivers=rec_tuples)
+            pde_loss += eikonal_loss_multi(sos_pred, arrival_times)
+            #print(pde_loss)
         pde_loss/=k_count
-        """
-        for sos_pred in sos_preds:
-            for src in sources[0].squeeze():
-                s = (int(src[0]), int(src[1]))
-                print(s)
-                print('------------')
-                pde_loss = eikonal_loss_multi(sos_pred.squeeze(), self.solver, s, roi_start=30, roi_end=90, eps=1e-8)
-                print(pde_loss)
-        """
+
+
         aw = 1
-        bw = 1e5
+        bw = 1e4
+
 
         total_loss = aw*mse_loss +  bw*pde_loss
         #log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
