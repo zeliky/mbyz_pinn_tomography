@@ -4,15 +4,14 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import math
 from dataset import TofDataset
-
+from models.eikonal_solver import EikonalSolverMultiLayer
 from settings import  app_settings
-from physics import Solver, _to_mps, _to_sec, eikonal_loss_multi
+from physics import _to_mps, _to_sec, eikonal_loss_multi
 import matplotlib.pyplot as plt
 from logger import log_image
-import random
 
-#source= (2,64)
-#solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
+source= (2,64)
+solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
 dataset = TofDataset(['train'])
 #d = dataset.__getitem__(idx =1)
 
@@ -45,7 +44,7 @@ for xs,ys,xr,yr,tof in d['known_tof']:
 
 """
 
-"""
+
 val_loader = DataLoader(dataset, batch_size=1, shuffle=False)
 for batch in val_loader:
 
@@ -58,35 +57,15 @@ for batch in val_loader:
         print(loss)
 
     break
-"""
 
-"""
-for known_tof in known_tofs:
-    for xs, ys, xr, yr, tof in known_tof:
-        new_s = (int(xs), int(ys))
-        if last_s[0] != new_s[0] or last_s[1] != new_s[1]:
-            print(new_s)
-            print('----------------------------------')
-            e
-        print(xs, ys, xr, yr, tof)
-"""
 
-solver = Solver()
-device = 'cuda'
-val_loader = DataLoader(dataset, batch_size=1, shuffle=False)
-for b_idx, batch in enumerate(val_loader):
-    tof_tensor = batch['raw_tof'].to(device)
-    sos_pred = batch['anatomy'].to(device)
-    sources = batch['x_s'].to(device)
-    receivers = batch['x_r'].to(device)
-
-    src_tuples = []
-    for src in sources[0].squeeze():
-        src_tuples.append((int(src[0]) - 1, int(src[1]) - 1))
-    rec_tuples = []
-    for rec in receivers[0].squeeze():
-        rec_tuples.append((int(rec[0]) - 1, int(rec[1]) - 1))
-
-    tof = solver.tof_domain(sos=sos_pred, sources=src_tuples, receivers=rec_tuples)
-    print(tof.shape)
-    print(tof.tolist())
+    """
+    for known_tof in known_tofs:
+        for xs, ys, xr, yr, tof in known_tof:
+            new_s = (int(xs), int(ys))
+            if last_s[0] != new_s[0] or last_s[1] != new_s[1]:
+                print(new_s)
+                print('----------------------------------')
+                e
+            print(xs, ys, xr, yr, tof)
+    """
