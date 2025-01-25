@@ -5,3 +5,4 @@ fpenv
 /src/Terminal_and_HTML_Code/__pycache__/
 /src/train_validation.pcl
 /src/__pycache__/
+*__pycache__*
