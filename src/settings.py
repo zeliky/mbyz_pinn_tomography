@@ -1,6 +1,6 @@
 class AppSettings:
     output_folder: str = "../myOutputs/"
-    input_folder: str = "../inputData/5_32_true_v2/"
+    input_folder: str = "../inputData"
 
     cached_dataset: str = 'train_validation.pcl'
     train_path: str = f'{input_folder}/ForLearning/'
