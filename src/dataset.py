@@ -12,6 +12,7 @@ import pickle
 from logger import log_message
 from settings import  app_settings
 import math
+
 class TofDataset(Dataset):
     def __init__(self, modes, **kwargs):
         super().__init__()
@@ -24,13 +25,20 @@ class TofDataset(Dataset):
         self.anatomy_height = kwargs.get('anatomy_height', 128.0)
 
 
-        self.min_sos = kwargs.get('min_sos', 1400)   # speed of sound in anatomy
-        self.max_sos = kwargs.get('min_sos', 1450)   # speed of sound in background
 
-        self.min_tof = kwargs.get('min_tof', 0)
-        self.max_tof = kwargs.get('max_tof', 100)
-        self.tof_scale_factor = kwargs.get('tof_scale_factor', 1e-4)
-        self.sos_scale_factor = kwargs.get('tof_scale_factor', 1e-3)
+        """
+            c0 = 0.1200; % speed of sound in air
+            c1 = 0.1520;  % speed of sound in "anatomy" 1520-1550  0.0030 in cm/µs.
+            c2 = 0.1440;  % speed of sound in fat 1440-1470 in cm/µs.
+            c3 = 0.1560;  % speed of sound in cancerous tumors 1550-1600 in cm/µs.
+            c4 = 0.1530;  % speed of sound in benign tumors 1530-1580 in cm/µs.
+        """
+        self.min_sos = app_settings.min_sos
+        self.max_sos = app_settings.max_sos
+
+        self.min_tof = app_settings.min_tof
+        self.max_tof = app_settings.max_tof
+
 
         self.modes_path = {
             'train': app_settings.train_path,
@@ -44,6 +52,10 @@ class TofDataset(Dataset):
         self.x_o_list = []
 
         self._build_files_index(self.modes)
+
+        empty_anatomy = self._prepare_mat_data(app_settings.no_anatomy_mat)
+        normalized_tof = (empty_anatomy['raw_tof'] - self.min_tof) / (self.max_tof - self.min_tof)
+        self.empty_tof = np.expand_dims(np.repeat(np.repeat(normalized_tof, 4, axis=0), 4, axis=1), axis=0)
 
     @staticmethod
     def load_dataset(source_file):
@@ -62,23 +74,35 @@ class TofDataset(Dataset):
         mat_data = self._prepare_mat_data( entry['mat'])
 
         # load images
-        tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
+        #tof_img = self._prepare_image(entry['tof'], anatomy_dimensions)
         #tof_img = self._prepare_image(entry['tof'], tof_dimensions)
-        anatomy_img = self._prepare_image(entry['anatomy'], anatomy_dimensions)
-        anatomy_img_sml = self._prepare_image(entry['anatomy'], tof_dimensions)
+        #anatomy_img = self._prepare_image(entry['anatomy'], anatomy_dimensions)
         #anatomy_img = self._prepare_image(entry['anatomy'], tof_dimensions)
 
         #use real tof data instead of the data encoded in the image since resize and image manipulations change the real TOF values
         #tof_img = np.expand_dims(mat_data['raw_tof'], axis=0)
-        raw_tof = mat_data['raw_tof']
+        #raw_tof = mat_data['raw_tof']
+
+        normalized_tof = (mat_data['raw_tof']-self.min_tof)/(self.max_tof-self.min_tof)
+        #normalized_tof = normalize_tof(mat_data['raw_tof'])
+        #print(f"{np.min(normalized_tof)} - {np.max(normalized_tof)}")
+        #exit();
+        tof_img =  np.expand_dims(np.repeat(np.repeat(normalized_tof, 4, axis=0), 4, axis=1), axis=0)
+
+        #tof_img -= self.empty_tof
+
+
+        normalized_anatomy = (mat_data['sos'] - self.min_sos) / (self.max_sos - self.min_sos)
+        anatomy_img = np.expand_dims(normalized_anatomy, axis=0)
+
         return {
             'anatomy': anatomy_img,
-            'anatomy_sml': anatomy_img_sml,
             'tof': tof_img,
-            'raw_tof': raw_tof,
-            'x_s': mat_data['x_s'],
-            'x_r': mat_data['x_r'],
-            'positions_mask': mat_data['positions_mask'],
+            #'raw_tof': mat_data['raw_tof'],
+            #'raw_sos': mat_data['V'],
+            'expanded_tof': mat_data['expanded_tof'],
+            #'x_s': mat_data['x_s'],
+            #'x_r': mat_data['x_r'],
         }
 
 
@@ -86,31 +110,19 @@ class TofDataset(Dataset):
         #log_message(f'loading mat file {path}')
         mat_data = loadmat(path)
 
-        xs_sources = np.array(np.round(mat_data['xs_sources'])  ).astype(int).flatten()
-        ys_sources = np.array(np.round(mat_data['ys_sources']) ).astype(int).flatten()
-        source_positions = np.column_stack([xs_sources, ys_sources])  # [num_sources, 2]
+        source_positions = np.array(mat_data['sources']).transpose() if 'sources' in mat_data else [] # [num_sources, 2]
+        receiver_positions =np.array(mat_data['receivers']).transpose() if 'receivers' in mat_data else [] # [num_receivers, 2]
+        sos =np.array(mat_data['V'])   if 'V' in mat_data else []  # [num_receivers, 2]
 
-        xs_receivers = np.array(np.round(mat_data['xs_receivers']) ).astype(int).flatten()
-        ys_receivers = np.array(np.round(mat_data['ys_receivers']) ).astype(int).flatten()
-        receiver_positions = np.column_stack([xs_receivers, ys_receivers])  # [num_receivers, 2]
-
-        tof_to_receivers = np.array((mat_data['t_obs'] / self.max_tof))  # [num_sources, num_receivers]
-        num_sources = self.sources_amount
-        num_receivers = self.receivers_amount
-
-        tof_mask = np.zeros([int(self.anatomy_width),int(self.anatomy_height)])
-        for j in range(num_receivers):
-            x, y = receiver_positions[j]
-            tof_mask[x-1, y-1] = 100+j
-        for j in range(num_sources):
-            x, y = source_positions[j]
-            tof_mask[x-1, y-1] = j
+        t_obs = np.array(mat_data['t_obs'])  # [num_sources, num_receivers]
+        expanded_tof = np.array(mat_data['exp_t_obs']) if 'exp_t_obs' in mat_data else []# [num_sources* num_receivers , 5]   (xs,ys,xr,yr,tobs(s,r))
 
         return {
            'x_s': source_positions,
-           'x_r': receiver_positions,
-           'positions_mask': tof_mask,
-           'raw_tof' : tof_to_receivers
+           'x_r': receiver_positions ,
+           'raw_tof' : t_obs,
+           'expanded_tof' : expanded_tof,
+           'sos' : sos
         }
 
     def _prepare_image(self, path, dimensions):
@@ -158,39 +170,7 @@ class TofDataset(Dataset):
 
 
 
-    def _generate_tof_tensor(self,mat_data):
 
-        # Extract data from mat_data
-        xs_sources = mat_data['xs_sources'].squeeze()
-        ys_sources = mat_data['ys_sources'].squeeze()
-        xs_receivers = mat_data['xs_receivers'].squeeze()
-        ys_receivers = mat_data['ys_receivers'].squeeze()
-        t_obs = mat_data['t_obs']
-
-        num_sources = len(xs_sources)
-        num_receivers = len(xs_receivers)
-
-        # Initialize the tensor with shape (num_sources, W, H)
-        tof_tensor = torch.ones((num_sources, int(self.anatomy_width), int(self.anatomy_height)))
-
-        # Populate the tensor
-        for source_idx in range(num_sources):
-            # Get source coordinates
-            source_x = math.floor(xs_sources[source_idx])
-            source_y = math.floor(ys_sources[source_idx])
-
-            # Place -1 at the source's location
-            tof_tensor[source_idx, source_y, source_x] = -1
-
-            for receiver_idx in range(num_receivers):
-                # Get receiver coordinates
-                receiver_x = math.floor(xs_receivers[receiver_idx])
-                receiver_y = math.floor(ys_receivers[receiver_idx])
-
-                # Place normalized ToF value at the receiver's location
-                tof_tensor[source_idx, receiver_y, receiver_x] = t_obs[source_idx, receiver_idx] * self.tof_scale_factor
-
-        return tof_tensor
 
     def _create_known_indices(self, mat_data):
         xs_sources = mat_data['xs_sources'].squeeze().astype(int)
@@ -239,3 +219,17 @@ class TofDataset(Dataset):
                 receiver_y = ys_receivers[receiver_idx]
                 mask[source_idx, receiver_y, receiver_x] = True
         return mask
+
+
+def normalize_tof(tof_tensor, method="standard", factor=10.0):
+    if method == "standard":
+        mean_val = tof_tensor.mean()
+        std_val = tof_tensor.std() + 1e-8  # prevent division by zero
+        normalized = (tof_tensor - mean_val) / std_val
+        return normalized
+
+    elif method == "scale":
+        return tof_tensor * factor
+
+    else:
+        raise ValueError("Unknown method. Use 'standard' or 'scale'.")

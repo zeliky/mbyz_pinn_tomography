@@ -1,8 +1,10 @@
 import torch.nn as nn
 import torch
 from physics import Solver, eikonal_loss_multi, eikonal_loss, initial_loss, boundary_loss,_to_mps
-from logger import log_message
+from logger import log_message, log_image
+from settings import  app_settings
 import random
+import math
 
 
 class BaseTrainingStep:
@@ -10,11 +12,13 @@ class BaseTrainingStep:
         self.model = None
         self.device = None
         self.criterion = None
+        self.w_criterion = None
 
     def init(self, model, device):
         self.model = model
         self.device = device
         self.criterion = nn.MSELoss()
+        self.w_criterion = MultiRangeWeightedMSELoss()
 
     def set_train_mode(self):
         self.model.train()
@@ -26,13 +30,133 @@ class BaseTrainingStep:
         pass
 
 
+class GradientMatchingLoss(nn.Module):
+    def __init__(self, reduction='mean'):
+        """
+        reduction: 'mean' or 'sum'
+        """
+        super(GradientMatchingLoss, self).__init__()
+        self.reduction = reduction
+
+    def forward(self, pred, target):
+        """
+        pred, target: (N, C, H, W) tensors (e.g., images)
+        """
+        # Compute gradients along x-axis
+        pred_dx = pred[:, :, :, 1:] - pred[:, :, :, :-1]
+        target_dx = target[:, :, :, 1:] - target[:, :, :, :-1]
+
+        # Compute gradients along y-axis
+        pred_dy = pred[:, :, 1:, :] - pred[:, :, :-1, :]
+        target_dy = target[:, :, 1:, :] - target[:, :, :-1, :]
+
+        # L1 difference of gradients
+        loss_x = (pred_dx - target_dx).abs()
+        loss_y = (pred_dy - target_dy).abs()
+
+        # Combine losses
+        if self.reduction == 'mean':
+            loss = loss_x.mean() + loss_y.mean()
+        elif self.reduction == 'sum':
+            loss = loss_x.sum() + loss_y.sum()
+        else:
+            # No reduction: returns the raw 2D loss map
+            loss = torch.cat([loss_x, loss_y], dim=-1)
+
+        return loss
+
+
+class MultiRangeWeightedMSELoss(nn.Module):
+    def __init__(self):
+        """
+        ranges_weights: List of (low_threshold, high_threshold, weight) tuples
+        default_weight: Weight for values outside all specified ranges
+        """
+        super(MultiRangeWeightedMSELoss, self).__init__()
+        self.min_sos = app_settings.min_sos
+        self.max_sos = app_settings.max_sos
+        """
+            c0 = 0.1200; % speed of sound in air
+            c2 = 0.1440;  % speed of sound in fat 1440-1470 in cm/µs.
+            c1 = 0.1520;  % speed of sound in "anatomy" 1520-1550  0.0030 in cm/µs.            
+            c3 = 0.1560;  % speed of sound in cancerous tumors 1550-1600 in cm/µs.
+            c4 = 0.1530;  % speed of sound in benign tumors 1530-1580 in cm/µs.
+        """
+        ranges_weights =[
+            (self.min_sos,   0.1400, 1000),      # surrounding env
+            (0.1400,         0.1520, 1000),     # fat
+            (0.1520,         0.1550, 500),     # benign tumour
+            (0.1550,         self.max_sos, 500)  # cancerous tumour
+        ]
+        self.ranges_weights= []
+        for min_val, max_val, weight in ranges_weights:
+            self.ranges_weights.append((
+                self._normalize_sos(min_val),
+                self._normalize_sos(max_val),
+                weight
+            ))
+        self.default_weight = 1
+
+    def _normalize_sos(self,val):
+        return (val - self.min_sos) / (self.max_sos - self.min_sos)
+    def forward(self, pred, target):
+        mse = (pred - target) ** 2  # Standard MSE
+
+        # Initialize weight map with default weight
+        weight_map = torch.full_like(target, self.default_weight)
+
+        # Apply weights for each range
+        #cnt = target.size(2) * target.size(3)
+        for low, high, weight in self.ranges_weights:
+            mask = (target > low) & (target < high)
+            #nz = torch.count_nonzero(mask)
+            #print(f"{low}-{high} count {nz} prec : {nz/cnt}")
+            weight_map[mask] += weight
+        #print("---------------------------------------")
+        
+        # Apply weighted MSE
+        weighted_mse = mse * weight_map
+
+        # Normalize by the number of elements
+        return weighted_mse.mean()
+
+
 class TofToSosUNetTrainingStep(BaseTrainingStep):
     def __init__(self):
         super().__init__()
         self.solver = Solver()
-
-
     def perform_step(self, batch):
+        tof_tensor = batch['tof'].float().to(self.device)
+        sos_tensor = batch['anatomy'].float().to(self.device)
+        #sources = batch['x_s'].to(self.device)
+        #receivers = batch['x_r'].to(self.device)
+
+        sos_pred = self.model(tof_tensor)
+        n_mse_loss = self.criterion(sos_pred, sos_tensor)
+        w_mse_loss = self.w_criterion(sos_pred, sos_tensor)
+        w = 0
+        if n_mse_loss<0.5:
+            w = _balance_order_of_magnitude(n_mse_loss, w_mse_loss)
+        #mse_loss = n_mse_loss + w*w_mse_loss
+        mse_loss = w_mse_loss
+
+        log_message(f"total_loss:{mse_loss} mse_loss: {n_mse_loss} w_mse_loss:{w_mse_loss} balance:{w}")
+
+        pde_loss = 0
+        aw = 1
+        bw = 1e4
+
+
+        total_loss = aw*mse_loss +  bw*pde_loss
+        #log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
+        #log_message(f"total_loss: {total_loss:.4e} ... mse_loss: {aw*mse_loss:.4e} ... pde_loss: {bw*pde_loss:.4e}")
+        weighted_mse_loss = aw*mse_loss
+        weighted_pde_loss = bw*pde_loss
+        weighted_bc_loss = 0
+        #return total_loss
+        return total_loss, weighted_mse_loss, weighted_pde_loss, weighted_bc_loss
+
+    def __DEP__perform_step(self, batch):
         tof_tensor = batch['tof'].to(self.device)
         sos_tensor = batch['anatomy'].to(self.device)
         sources = batch['x_s'].to(self.device)
@@ -224,5 +348,19 @@ class TofPredictorTrainingStep_V1(BaseTrainingStep):
         coords.requires_grad_(True)
         return coords
 
+
+def _balance_order_of_magnitude(a, b):
+    # Calculate the orders of magnitude of a and b
+    eps = 1e-16
+    order_a = math.log10(a+eps)
+    order_b = math.log10(b+eps)
+
+    # Calculate the difference in orders of magnitude
+    difference = order_a - order_b
+
+    # Find the weight to balance the orders of magnitude
+    weight = 10 ** math.ceil(difference)
+
+    return weight
 
 

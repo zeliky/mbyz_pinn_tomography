@@ -7,7 +7,7 @@ from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTr
 from models.eikonal_solver import EikonalSolverMultiLayer
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-checkpoint_path = 'pinn_tof-predictor_model.2025_01_16_22_48_57_577187-2.pth'
+checkpoint_path = 'pinn_tof-predictor_model.2025_02_09_00_36_38_771232-2.pth'
 
 
 trainer = PINNTrainer(model=TofToSosUNetModel(),

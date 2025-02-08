@@ -8,9 +8,8 @@ from dataset import TofDataset
 from settings import  app_settings
 from physics import Solver, _to_mps, _to_sec, eikonal_loss_multi
 import matplotlib.pyplot as plt
-from logger import log_image
+from logger import log_image, log_message
 import random
-
 #source= (2,64)
 #solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
 dataset = TofDataset(['train'])
@@ -71,6 +70,7 @@ for known_tof in known_tofs:
         print(xs, ys, xr, yr, tof)
 """
 
+"""
 solver = Solver()
 device = 'cuda'
 val_loader = DataLoader(dataset, batch_size=1, shuffle=False)
@@ -90,3 +90,37 @@ for b_idx, batch in enumerate(val_loader):
     tof = solver.tof_domain(sos=sos_pred, sources=src_tuples, receivers=rec_tuples)
     print(tof.shape)
     print(tof.tolist())
+"""
+
+num_samples = 10
+val_loader = DataLoader(dataset, batch_size=1, shuffle=False)
+
+count = 0
+for batch in val_loader:
+    tof = batch['tof']
+    anatomy = batch['anatomy']
+
+    for i in range(tof.size(0)):
+        tof_np = tof[i]
+        anatomy_np = anatomy[i]
+
+
+        # Plot anatomy and c_pred side by side
+        fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+
+        axs[0].imshow(tof_np.squeeze(0), cmap='jet')
+        axs[0].set_title('TOF')
+        axs[0].axis('off')
+
+        axs[1].imshow(anatomy_np.squeeze(0), cmap='gray')
+        axs[1].set_title('Original Anatomy')
+        axs[1].axis('off')
+
+        # plt.tight_layout()
+        # plt.show()
+        log_image(fig)
+        log_message(' ')
+        count+=1
+        if count> num_samples:
+            break
+

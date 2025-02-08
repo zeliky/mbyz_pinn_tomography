@@ -30,7 +30,7 @@ class PINNTrainer:
         self.data_weight = kwargs.get('data_weight',  1e-4)
         self.pde_weight = kwargs.get('pde_weight',  1.0)
         self.bc_weight = kwargs.get('bc_weight',  1e-4)
-        self.scheduler_step_size= 4
+        self.scheduler_step_size= kwargs.get('scheduler_step_size',  4)
         
         self.epochs_vec= [] # for visualization
         self.epoch_loss_vec = [] # for visualization
@@ -110,8 +110,9 @@ class PINNTrainer:
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
 
         num_epochs = self.epochs
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.scheduler_step_size, gamma=0.1)
-        
+        #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.scheduler_step_size, gamma=0.1)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
+
         self.epochs_vec= [] # for visualization
         self.epoch_loss_vec = [] # for visualization
         self.epoch_val_loss_vec = [] # for visualization
@@ -185,7 +186,7 @@ class PINNTrainer:
                     log_message(' ')
                     
             self.save_state(self.model, optimizer, val_loss, epoch)
-            scheduler.step()
+            scheduler.step(val_loss)
 
             self.epochs_vec.append(epoch+1) # for visualization
             self.epoch_loss_vec.append(epoch_loss) # for visualization
@@ -316,3 +317,5 @@ def _to_pixel_coordinates(src, W, H):
     norm_pixels[:, 1] = norm_pixels[:, 1] * (H - 1)
 
     return norm_pixels
+
+

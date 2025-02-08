@@ -15,7 +15,8 @@ from models.eikonal_solver import EikonalSolverMultiLayer
 
 #sos_checkpoint_path = 'pinn_tof-sos_model.5tumors_w_noise.pth'
 #tof_checkpoint_path = 'pinn_tof-predictor_model.sources_only.pth'
-sos_checkpoint_path = 'pinn_tof-predictor_model.pth'
+#sos_checkpoint_path = 'pinn_tof-predictor_model.pth'
+sos_checkpoint_path = None
 tof_checkpoint_path = None
 combined_checkpoint_path = None
 
@@ -23,14 +24,15 @@ combined_checkpoint_path = None
 
 def train_sos_predictor():
     global sos_checkpoint_path
-    epochs = 5
+    epochs = 30
     trainer = PINNTrainer(model=TofToSosUNetModel(),
                           training_step_handler=TofToSosUNetTrainingStep(),
                           batch_size=1,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,
-                          lr=1e-3
+                          lr=1e-3,
+                          scheduler_step_size=4
                           )
     if sos_checkpoint_path is not None:
         trainer.load_checkpoint(sos_checkpoint_path)

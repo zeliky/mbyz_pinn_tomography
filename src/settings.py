@@ -10,10 +10,10 @@ class AppSettings:
 
     anatomy_width: int = 128
     anatomy_height: int= 128
-    min_sos: float=0.14
-    max_sos: float=0.145
+    min_sos: float=0.115
+    max_sos: float=0.17
     min_tof: float=0.0
-    max_tof: float=100.0
+    max_tof: float=1000.0
     pixel_to_mm = 1e-3
     sources_amount = 32
     receivers_amount = 32
