@@ -1,17 +1,19 @@
 import os
 from dataset import TofDataset
+from settings import app_settings
 from train import PINNTrainer
+from models.pinn_linear import TOFtoSOSPINNLinerModel
 from models.pinn_combined import CombinedSosTofModel
 from models.resnet_ltsm import   TofToSosUNetModel
-from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTrainingStep
+from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTrainingStep, TOFtoSOSPINNLinerTrainingStep
 from models.eikonal_solver import EikonalSolverMultiLayer
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-checkpoint_path = 'pinn_tof-predictor_model.2025_02_09_00_36_38_771232-2.pth'
+checkpoint_path = 'TOFtoSOSPINNLinerModel.2025_02_12_22_50_02_469964-0.pth'
 
 
-trainer = PINNTrainer(model=TofToSosUNetModel(),
-                          training_step_handler=TofToSosUNetTrainingStep(),
+trainer = PINNTrainer(model=TOFtoSOSPINNLinerModel(app_settings.sources_amount),
+                          training_step_handler=TOFtoSOSPINNLinerTrainingStep(),
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['test'])
     )

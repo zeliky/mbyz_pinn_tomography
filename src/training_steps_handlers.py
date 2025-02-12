@@ -1,5 +1,6 @@
 import torch.nn as nn
 import torch
+import numpy as np
 from physics import Solver, eikonal_loss_multi, eikonal_loss, initial_loss, boundary_loss,_to_mps
 from logger import log_message, log_image
 from settings import  app_settings
@@ -29,41 +30,11 @@ class BaseTrainingStep:
     def perform_step(self, batch):
         pass
 
+    def get_model_input_data(self, batch):
+        return batch['tof'].float().to(self.device)
 
-class GradientMatchingLoss(nn.Module):
-    def __init__(self, reduction='mean'):
-        """
-        reduction: 'mean' or 'sum'
-        """
-        super(GradientMatchingLoss, self).__init__()
-        self.reduction = reduction
 
-    def forward(self, pred, target):
-        """
-        pred, target: (N, C, H, W) tensors (e.g., images)
-        """
-        # Compute gradients along x-axis
-        pred_dx = pred[:, :, :, 1:] - pred[:, :, :, :-1]
-        target_dx = target[:, :, :, 1:] - target[:, :, :, :-1]
 
-        # Compute gradients along y-axis
-        pred_dy = pred[:, :, 1:, :] - pred[:, :, :-1, :]
-        target_dy = target[:, :, 1:, :] - target[:, :, :-1, :]
-
-        # L1 difference of gradients
-        loss_x = (pred_dx - target_dx).abs()
-        loss_y = (pred_dy - target_dy).abs()
-
-        # Combine losses
-        if self.reduction == 'mean':
-            loss = loss_x.mean() + loss_y.mean()
-        elif self.reduction == 'sum':
-            loss = loss_x.sum() + loss_y.sum()
-        else:
-            # No reduction: returns the raw 2D loss map
-            loss = torch.cat([loss_x, loss_y], dim=-1)
-
-        return loss
 
 
 class MultiRangeWeightedMSELoss(nn.Module):
@@ -83,10 +54,10 @@ class MultiRangeWeightedMSELoss(nn.Module):
             c4 = 0.1530;  % speed of sound in benign tumors 1530-1580 in cm/µs.
         """
         ranges_weights =[
-            (self.min_sos,   0.1400, 1000),      # surrounding env
-            (0.1400,         0.1520, 1000),     # fat
-            (0.1520,         0.1550, 500),     # benign tumour
-            (0.1550,         self.max_sos, 500)  # cancerous tumour
+            (self.min_sos,   0.1400, 0),
+            (0.1400,         0.4900, 0),
+            (0.1500,         0.1550, 500),
+            (0.1550,         self.max_sos, 1000)  # cancerous tumour
         ]
         self.ranges_weights= []
         for min_val, max_val, weight in ranges_weights:
@@ -95,7 +66,7 @@ class MultiRangeWeightedMSELoss(nn.Module):
                 self._normalize_sos(max_val),
                 weight
             ))
-        self.default_weight = 1
+        self.default_weight = 0
 
     def _normalize_sos(self,val):
         return (val - self.min_sos) / (self.max_sos - self.min_sos)
@@ -121,6 +92,103 @@ class MultiRangeWeightedMSELoss(nn.Module):
         return weighted_mse.mean()
 
 
+
+class TOFtoSOSPINNLinerTrainingStep(BaseTrainingStep):
+    def __init__(self):
+        super().__init__()
+        self.X_tensor = None
+        self.Y_tensor = None
+        self.epsilon = 1e-10
+
+    def init(self, model, device):
+        super().init( model, device)
+        x_vals = np.linspace(1, app_settings.anatomy_width, app_settings.anatomy_width)
+        y_vals = np.linspace(1, app_settings.anatomy_height, app_settings.anatomy_height)
+        X, Y = np.meshgrid(x_vals, y_vals)
+        self.X_tensor = torch.tensor(X, dtype=torch.float32, requires_grad=True).reshape(-1, 1).to(self.device)
+        self.Y_tensor = torch.tensor(Y, dtype=torch.float32, requires_grad=True).reshape(-1, 1).to(self.device)
+
+    def perform_step(self, batch):
+        c_true = batch['sos'].squeeze().float().to(self.device)
+        x, y, tof = self.get_model_input_data(batch)
+        c_pred = self.model(x, y, tof)[:, 0]
+
+        if self.model.training:
+            return self.pinn_loss(tof, c_pred, c_true,  domain_xy=[x, y])
+        else:
+
+            h, w = c_true.shape
+            c_pred = c_pred.reshape(h, w)
+            return self.data_loss( c_pred, c_true)
+
+    def get_model_input_data(self, batch):
+        all_tof_maps = batch['tof_maps'].squeeze()
+        num_sources = self.model.num_sources
+        selected_sources = random.choices(range(num_sources), k=num_sources)
+        tof_maps = all_tof_maps[selected_sources]
+
+        ToF_tensors = [torch.tensor(tof, dtype=torch.float32).reshape(-1, 1) for tof in tof_maps]
+        ToF_combined = torch.cat(ToF_tensors, dim=1).to(self.device)  # Combine ToF maps as input features
+
+        sample_perc = 1
+        num_samples = int(sample_perc * self.X_tensor.shape[0])  # Use only part of the tof messured until I can ran it with source / dest locations only
+        sample_indices = np.random.choice(self.X_tensor.shape[0], num_samples, replace=False)
+
+        X_sampled = self.X_tensor[sample_indices]
+        Y_sampled = self.Y_tensor[sample_indices]
+        ToF_sampled = ToF_combined[sample_indices]
+        return X_sampled, Y_sampled, ToF_sampled
+
+    def pinn_loss(self, tof_map, c_pred,c_true, domain_xy):
+        # Compute gradient of predicted ToF using automatic differentiation
+        T_s_pred = torch.autograd.grad(c_pred.sum(), domain_xy, create_graph=True)
+        grad_T = torch.sqrt(torch.clamp(T_s_pred[0] ** 2 + T_s_pred[1] ** 2, min=self.epsilon))
+
+        # Eikonal loss
+        loss_eikonal = torch.mean((grad_T - 1 / (c_pred+self.epsilon)) ** 2)
+
+        # ToF consistency loss (ensure predicted ToF aligns with input ToF values)
+        dx = 1
+
+        T_pred = torch.cumsum(1 / (c_pred.view(-1, 1) + self.epsilon), dim=0) * dx  # Approximate travel time Predicted ToF for all sources
+        T_pred = T_pred.repeat(1, tof_map.shape[1])  # Expand to match source count
+
+        loss_tof = torch.mean((T_pred - tof_map) ** 2) / (torch.var(tof_map) + self.epsilon)
+
+        # Smoothness regularization
+        loss_smooth = torch.mean(torch.abs(torch.gradient(c_pred)[0]))
+
+        # MSE loss
+        h, w = c_true.shape
+        c_pred = c_pred.reshape(h, w)
+        mse_loss = self.criterion(c_pred, c_true)
+
+        # balance losses
+        w_eik = min(_balance_order_of_magnitude(mse_loss,loss_eikonal), 0.000001)
+        w_tof =  max(_balance_order_of_magnitude(mse_loss, loss_tof),0.1)
+        w_smooth = max(_balance_order_of_magnitude(w_eik*loss_eikonal, loss_smooth) / 10, 0.0001)
+
+        #w_eik = 0
+        w_tof = 0
+        #w_smooth = 0
+        loss_total = mse_loss + w_eik*loss_eikonal + w_tof * loss_tof + w_smooth * loss_smooth
+
+        log_message(
+            f"total_loss:{loss_total} mse_loss:{mse_loss} loss_eikonal:{loss_eikonal} (w{w_eik})   loss_tof: {loss_tof} (w{w_tof})  loss_smooth:{loss_smooth} (w{w_smooth})")
+        return loss_total, loss_tof, loss_eikonal, loss_smooth
+
+    def data_loss(self, sos_pred, sos_true):
+        n_mse_loss = self.criterion(sos_pred, sos_true)
+        w_mse_loss = self.w_criterion(sos_pred, sos_true)
+        w = 0
+        if n_mse_loss < 0.1:
+            w = _balance_order_of_magnitude(n_mse_loss, w_mse_loss) / 10
+        loss_total = n_mse_loss + w * w_mse_loss
+        log_message(
+            f"total_loss:{loss_total}  n_mse_loss: {n_mse_loss} w_mse_loss:{w_mse_loss} balance:{w }")
+        return loss_total, n_mse_loss, w_mse_loss, w
+
+
 class TofToSosUNetTrainingStep(BaseTrainingStep):
     def __init__(self):
         super().__init__()
@@ -135,10 +203,10 @@ class TofToSosUNetTrainingStep(BaseTrainingStep):
         n_mse_loss = self.criterion(sos_pred, sos_tensor)
         w_mse_loss = self.w_criterion(sos_pred, sos_tensor)
         w = 0
-        if n_mse_loss<0.5:
-            w = _balance_order_of_magnitude(n_mse_loss, w_mse_loss)
-        #mse_loss = n_mse_loss + w*w_mse_loss
-        mse_loss = w_mse_loss
+        if n_mse_loss<0.1:
+            w = _balance_order_of_magnitude(n_mse_loss, w_mse_loss)/10
+        mse_loss = n_mse_loss + w*w_mse_loss
+        #mse_loss = w_mse_loss
 
         log_message(f"total_loss:{mse_loss} mse_loss: {n_mse_loss} w_mse_loss:{w_mse_loss} balance:{w}")
 

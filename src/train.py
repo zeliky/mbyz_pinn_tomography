@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
+import numpy as np
 from logger import log_message, log_image
 from settings import app_settings
 from datetime import datetime
@@ -203,7 +204,7 @@ class PINNTrainer:
     def save_state(self, model, optimizer,loss, epoch):
         current_datetime = datetime.now()
         formatted_datetime = current_datetime.strftime("%Y_%m_%d_%H_%M_%S_%f")
-        save_path = f"{app_settings.output_folder}/pinn_tof-predictor_model.{formatted_datetime}-{epoch}.pth"
+        save_path = f"{app_settings.output_folder}/{model.__class__.__name__}.{formatted_datetime}-{epoch}.pth"
         torch.save({
             'state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
@@ -237,7 +238,7 @@ class PINNTrainer:
 
 
     def visualize_predictions(self,  num_samples=5):
-        val_loader = DataLoader(self.val_dataset, batch_size=2, shuffle=False)
+        val_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False)
         self.model.eval()
         with torch.no_grad():
             count = 0
@@ -247,11 +248,27 @@ class PINNTrainer:
                 #positions_mask = batch['positions_mask'].float().to(self.device)
                 #c_pred, t_pred = self.model(tof)
                 #c_pred, t_pred = self.model(tof, positions_mask)
-                c_pred = self.model(tof)
-                for i in range(c_pred.size(0)):
-                    tof_np = tof[i].cpu().numpy()
+
+                #tof = self.training_step_handler.get_model_input_data(batch)
+                #tof = self.training_step_handler.get_model_input_data(batch)
+                #c_pred = self.model(tof)
+
+                x, y, tof_val = self.training_step_handler.get_model_input_data(batch)
+                c_pred = self.model(x, y, tof_val)
+
+                _, _,h, w = anatomy.shape
+                c_pred = np.expand_dims(np.expand_dims(c_pred.reshape(h, w).cpu(), axis=0), axis=0)
+                c_pred  =  (c_pred - app_settings.min_sos) / (app_settings.max_sos - app_settings.min_sos)
+                #print(c_pred.shape)
+
+
+                for i in range(tof.size(0)):
+
+                    #tof_np = tof[i].cpu().numpy()
+                    tof_np = tof[i].cpu()
                     anatomy_np = anatomy[i].numpy()
-                    c_pred_np = c_pred[i].cpu().numpy()
+                    #c_pred_np = c_pred[i].cpu().numpy()
+                    c_pred_np = c_pred[i]
 
 
                     # Plot anatomy and c_pred side by side

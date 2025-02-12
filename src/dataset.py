@@ -84,23 +84,24 @@ class TofDataset(Dataset):
         #raw_tof = mat_data['raw_tof']
 
         normalized_tof = (mat_data['raw_tof']-self.min_tof)/(self.max_tof-self.min_tof)
-        #normalized_tof = normalize_tof(mat_data['raw_tof'])
-        #print(f"{np.min(normalized_tof)} - {np.max(normalized_tof)}")
-        #exit();
+        #normalized_tof = std_norm(mat_data['raw_tof'])
         tof_img =  np.expand_dims(np.repeat(np.repeat(normalized_tof, 4, axis=0), 4, axis=1), axis=0)
 
         #tof_img -= self.empty_tof
 
 
         normalized_anatomy = (mat_data['sos'] - self.min_sos) / (self.max_sos - self.min_sos)
+        #normalized_anatomy = std_norm(mat_data['sos'])
         anatomy_img = np.expand_dims(normalized_anatomy, axis=0)
 
         return {
             'anatomy': anatomy_img,
             'tof': tof_img,
+            'sos': mat_data['sos'],
             #'raw_tof': mat_data['raw_tof'],
             #'raw_sos': mat_data['V'],
             'expanded_tof': mat_data['expanded_tof'],
+            'tof_maps': mat_data['tof_maps'],
             #'x_s': mat_data['x_s'],
             #'x_r': mat_data['x_r'],
         }
@@ -117,12 +118,16 @@ class TofDataset(Dataset):
         t_obs = np.array(mat_data['t_obs'])  # [num_sources, num_receivers]
         expanded_tof = np.array(mat_data['exp_t_obs']) if 'exp_t_obs' in mat_data else []# [num_sources* num_receivers , 5]   (xs,ys,xr,yr,tobs(s,r))
 
+        tof_maps = np.array(mat_data['tmap']) if 'tmap' in mat_data else np.array([])# [num_sources, 128x128]
+
+
         return {
            'x_s': source_positions,
            'x_r': receiver_positions ,
            'raw_tof' : t_obs,
            'expanded_tof' : expanded_tof,
-           'sos' : sos
+           'sos' : sos,
+           'tof_maps' : tof_maps
         }
 
     def _prepare_image(self, path, dimensions):
@@ -172,7 +177,7 @@ class TofDataset(Dataset):
 
 
 
-    def _create_known_indices(self, mat_data):
+    def DEP_create_known_indices(self, mat_data):
         xs_sources = mat_data['xs_sources'].squeeze().astype(int)
         xs_receivers = mat_data['xs_receivers'].squeeze().astype(int)
         ys_receivers = mat_data['ys_receivers'].squeeze().astype(int)
@@ -193,7 +198,7 @@ class TofDataset(Dataset):
         return mask
 
 
-    def _create_boundary_indices(self, mat_data):
+    def DEP_create_boundary_indices(self, mat_data):
         xs_sources = mat_data['xs_sources'].squeeze().astype(int)
         ys_sources = mat_data['ys_sources'].squeeze().astype(int)
         xs_receivers = mat_data['xs_receivers'].squeeze().astype(int)
@@ -221,15 +226,15 @@ class TofDataset(Dataset):
         return mask
 
 
-def normalize_tof(tof_tensor, method="standard", factor=10.0):
+def std_norm(tensor, method="standard", factor=10.0):
     if method == "standard":
-        mean_val = tof_tensor.mean()
-        std_val = tof_tensor.std() + 1e-8  # prevent division by zero
-        normalized = (tof_tensor - mean_val) / std_val
+        mean_val = tensor.mean()
+        std_val = tensor.std() + 1e-8  # prevent division by zero
+        normalized = (tensor - mean_val) / std_val
         return normalized
 
     elif method == "scale":
-        return tof_tensor * factor
+        return tensor * factor
 
     else:
         raise ValueError("Unknown method. Use 'standard' or 'scale'.")
