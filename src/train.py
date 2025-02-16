@@ -253,7 +253,7 @@ class PINNTrainer:
                 #tof = self.training_step_handler.get_model_input_data(batch)
                 #c_pred = self.model(tof)
 
-                x, y, tof_val = self.training_step_handler.get_model_input_data(batch)
+                selected_sources, x, y, tof_val = self.training_step_handler.get_model_input_data(batch)
                 c_pred = self.model(x, y, tof_val)
 
                 _, _,h, w = anatomy.shape

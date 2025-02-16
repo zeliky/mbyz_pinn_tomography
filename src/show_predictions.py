@@ -9,7 +9,7 @@ from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTr
 from models.eikonal_solver import EikonalSolverMultiLayer
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-checkpoint_path = 'TOFtoSOSPINNLinerModel.2025_02_12_22_50_02_469964-0.pth'
+checkpoint_path = 'TOFtoSOSPINNLinerModel.2025_02_16_16_53_07_588042-1.pth'
 
 
 trainer = PINNTrainer(model=TOFtoSOSPINNLinerModel(app_settings.sources_amount),

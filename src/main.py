@@ -35,7 +35,7 @@ def train_multitof_to_sos_predictor():
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,
-                          lr=1e-4
+                          lr=1e-3
                           )
     if multi_tof_checkpoint_path is not None:
         trainer.load_checkpoint(multi_tof_checkpoint_path)

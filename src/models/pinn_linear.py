@@ -12,7 +12,9 @@ class TOFtoSOSPINNLinerModel(nn.Module):
         self.num_sources =num_sources
         super(TOFtoSOSPINNLinerModel, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(2 + num_sources, 128),  # (x, y, ToF values per source)
+            nn.Linear(2 + num_sources, 64),  # (x, y, ToF values per source)
+            nn.Tanh(),
+            nn.Linear(64, 128),
             nn.Tanh(),
             nn.Linear(128, 128),
             nn.Tanh(),

@@ -110,7 +110,7 @@ class TOFtoSOSPINNLinerTrainingStep(BaseTrainingStep):
 
     def perform_step(self, batch):
         c_true = batch['sos'].squeeze().float().to(self.device)
-        x, y, tof = self.get_model_input_data(batch)
+        selected_sources, x, y, tof = self.get_model_input_data(batch)
         c_pred = self.model(x, y, tof)[:, 0]
 
         if self.model.training:
@@ -133,27 +133,40 @@ class TOFtoSOSPINNLinerTrainingStep(BaseTrainingStep):
         sample_perc = 1
         num_samples = int(sample_perc * self.X_tensor.shape[0])  # Use only part of the tof messured until I can ran it with source / dest locations only
         sample_indices = np.random.choice(self.X_tensor.shape[0], num_samples, replace=False)
+        sample_indices = sorted(sample_indices)
 
         X_sampled = self.X_tensor[sample_indices]
         Y_sampled = self.Y_tensor[sample_indices]
         ToF_sampled = ToF_combined[sample_indices]
-        return X_sampled, Y_sampled, ToF_sampled
+        return selected_sources, X_sampled, Y_sampled, ToF_sampled
 
     def pinn_loss(self, tof_map, c_pred,c_true, domain_xy):
-        # Compute gradient of predicted ToF using automatic differentiation
-        T_s_pred = torch.autograd.grad(c_pred.sum(), domain_xy, create_graph=True)
-        grad_T = torch.sqrt(torch.clamp(T_s_pred[0] ** 2 + T_s_pred[1] ** 2, min=self.epsilon))
+        # Compute predicted travel time from learned SoS
+        T_pred_sources = []
+        for s in range(num_sources):
+            T_pred_s = fast_marching_2d(c_pred, sources[s])  # shape [num_samples] or [res*res]
+            T_pred_grad_x = torch.autograd.grad(T_pred_s.sum(), domain_xy[0], create_graph=True)[0]
+            T_pred_grad_y = torch.autograd.grad(T_pred_s.sum(), domain_xy[1], create_graph=True)[0]
 
-        # Eikonal loss
-        loss_eikonal = torch.mean((grad_T - 1 / (c_pred+self.epsilon)) ** 2)
+            # Compute gradient magnitude
+            grad_T_pred = torch.sqrt(torch.clamp(T_pred_grad_x ** 2 + T_pred_grad_y ** 2, min=self.epsilon))
 
-        # ToF consistency loss (ensure predicted ToF aligns with input ToF values)
-        dx = 1
+            # Compute eikonal loss (ensure predicted wavefront follows physics)
+            loss_eikonal = torch.mean((grad_T_pred - 1 / (c_pred + self.epsilon)) ** 2)
 
-        T_pred = torch.cumsum(1 / (c_pred.view(-1, 1) + self.epsilon), dim=0) * dx  # Approximate travel time Predicted ToF for all sources
-        T_pred = T_pred.repeat(1, tof_map.shape[1])  # Expand to match source count
+            loss_tof = torch.mean((T_pred - tof_map) ** 2) / (torch.var(tof_map) + self.epsilon)
 
-        loss_tof = torch.mean((T_pred - tof_map) ** 2) / (torch.var(tof_map) + self.epsilon)
+
+       
+
+
+
+
+
+
+
+
+
 
         # Smoothness regularization
         loss_smooth = torch.mean(torch.abs(torch.gradient(c_pred)[0]))
@@ -170,8 +183,10 @@ class TOFtoSOSPINNLinerTrainingStep(BaseTrainingStep):
 
         #w_eik = 0
         w_tof = 0
-        #w_smooth = 0
-        loss_total = mse_loss + w_eik*loss_eikonal + w_tof * loss_tof + w_smooth * loss_smooth
+        w_smooth = 0
+        w_mse = 1
+        loss_total = w_mse*mse_loss + w_eik*loss_eikonal + w_tof * loss_tof + w_smooth * loss_smooth
+
 
         log_message(
             f"total_loss:{loss_total} mse_loss:{mse_loss} loss_eikonal:{loss_eikonal} (w{w_eik})   loss_tof: {loss_tof} (w{w_tof})  loss_smooth:{loss_smooth} (w{w_smooth})")
@@ -431,4 +446,13 @@ def _balance_order_of_magnitude(a, b):
 
     return weight
 
+
+def _compute_laplacian_loss(c_pred, X, Y):
+    """
+    Compute smoothness loss using Laplacian second derivatives.
+    """
+    T_xx = torch.autograd.grad(c_pred.sum(), X, create_graph=True)[0]
+    T_yy = torch.autograd.grad(c_pred.sum(), Y, create_graph=True)[0]
+    laplacian_loss = torch.mean(T_xx ** 2 + T_yy ** 2)
+    return laplacian_loss
 
