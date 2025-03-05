@@ -245,6 +245,7 @@ class PINNTrainer:
             for batch in val_loader:
                 tof = batch['tof'].float().to(self.device)
                 anatomy = batch['anatomy'].cpu()
+
                 #positions_mask = batch['positions_mask'].float().to(self.device)
                 #c_pred, t_pred = self.model(tof)
                 #c_pred, t_pred = self.model(tof, positions_mask)
@@ -253,14 +254,15 @@ class PINNTrainer:
                 #tof = self.training_step_handler.get_model_input_data(batch)
                 #c_pred = self.model(tof)
 
-                selected_sources, x, y, tof_val = self.training_step_handler.get_model_input_data(batch)
-                c_pred = self.model(x, y, tof_val)
+                #selected_sources, x, y, tof_val = self.training_step_handler.get_model_input_data(batch)
+                #c_pred = self.model(x, y, tof_val)
 
-                _, _,h, w = anatomy.shape
-                c_pred = np.expand_dims(np.expand_dims(c_pred.reshape(h, w).cpu(), axis=0), axis=0)
-                c_pred  =  (c_pred - app_settings.min_sos) / (app_settings.max_sos - app_settings.min_sos)
+                #_, _,h, w = anatomy.shape
+                #c_pred = np.expand_dims(np.expand_dims(c_pred.reshape(h, w).cpu(), axis=0), axis=0)
+                #c_pred  =  (c_pred - app_settings.min_sos) / (app_settings.max_sos - app_settings.min_sos)
                 #print(c_pred.shape)
 
+                c_pred = self.training_step_handler.eval_model(batch)
 
                 for i in range(tof.size(0)):
 

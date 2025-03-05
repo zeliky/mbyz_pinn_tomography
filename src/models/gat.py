@@ -4,9 +4,9 @@ import torch_geometric.nn as pyg_nn
 from torch_geometric.nn import GATConv
 
 
-class DualHeadGAT(nn.Module):
+class DualHeadGATModel(nn.Module):
     def __init__(self, in_channels=2, hidden_channels=64, out_channels=2,
-                 num_layers=3, heads=4):
+                 num_layers=4, heads=4):
         """
         A multi-layer GAT model:
           - num_layers GATConv layers
@@ -21,6 +21,7 @@ class DualHeadGAT(nn.Module):
         """
         super().__init__()
         self.num_layers = num_layers
+        self.skip = nn.Linear(in_channels, out_channels)  # Skip connection
 
         # 1) First GAT layer: from in_channels to hidden_channels * heads
         self.convs = nn.ModuleList()
@@ -41,7 +42,8 @@ class DualHeadGAT(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(self, x, edge_index):
+        x_residual = self.skip(x)  # Preserve input features
         for i, conv in enumerate(self.convs):
             x = self.relu(conv(x, edge_index))
 
-        return x
+        return x+x_residual

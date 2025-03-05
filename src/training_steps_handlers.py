@@ -30,6 +30,9 @@ class BaseTrainingStep:
 
     def perform_step(self, batch):
         pass
+    def eval_model(self,batch):
+        input_args = self.training_step_handler.get_model_input_data(batch)
+        return self.model(*input_args)
 
     def get_model_input_data(self, batch):
         return batch['tof'].float().to(self.device)
@@ -109,7 +112,8 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
     def perform_step(self, batch):
         sources_positions = batch['x_s'].squeeze()
         receivers_positions = batch['x_r'].squeeze()
-        tof = batch['raw_tof'].squeeze()
+        tof = batch['raw_tof'].squeeze().float().to(self.device)
+
         all_tof_maps = batch['tof_maps'].squeeze().float().to(self.device)
         sos = batch['sos'].squeeze().float().to(self.device)
         c_true = self._get_region_of_interest(sos)
@@ -117,63 +121,110 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
         if not self.gd.initialized:
             self.gd.build(sources_positions, receivers_positions)
 
-        num_sources = 5
+        num_sources = 15
         selected_sources = random.sample(range(32), k=num_sources)
 
-        data_loss = 0
 
+        sos_list = []
+        loss_tof_total = 0.0
+        loss_bc_total = 0.0
+        pde_loss_total = 0.0
         for i, data in self.gd.get_graph(tof, selected_sources, self.device):
             pred = self.model(data.x, data.edge_index)
-            tof_pred, sos_pred = self._extract_tof_sos(pred)
+            boundary ,tof_pred, sos_pred = self._extract_tof_sos(pred)
 
-            tof_true = self._get_region_of_interest(all_tof_maps[i])
-            #print(f"tof_true min{torch.min(tof_true)} max{torch.max(tof_true)} mean:{torch.mean(tof_true)}")
+            sos_list.append(sos_pred)
+
+            T_true = self._get_region_of_interest(all_tof_maps[i])
+            #compare between tof[i,:] (values on receivers and predicted value on receivers
+            #print(boundary)
+            #print(tof[i,:])
+            bc_loss_i = self.criterion(boundary, tof[i,:])
+            loss_bc_total += bc_loss_i
+
+            loss_tof_i = self.criterion(tof_pred, T_true)
+            loss_tof_total += loss_tof_i
+
+            pde_loss_total += self.eikonal_loss(tof_pred, sos_pred)
+            #print(sos_pred)
             #print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
-            #print(f"c_true min{torch.min(c_true)} max{torch.max(c_true)} mean:{torch.mean(c_true)}")
-            #print(f"sos_pred min{torch.min(sos_pred)} max{torch.max(sos_pred)} mean:{torch.mean(sos_pred)}")
+            #print(f"-- sos_pred min{torch.min(sos_pred)} max{torch.max(sos_pred)} mean:{torch.mean(sos_pred)}")
+            #print(f"- tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
+            #print(f"- boundary min{torch.min(boundary)} max{torch.max(boundary)} mean:{torch.mean(boundary)}")
+            #print(f"+ tof_true min{torch.min(T_true)} max{torch.max(T_true)} mean:{torch.mean(T_true)}")
 
-            loss_sos = self.criterion(sos_pred, c_true)
-            loss_tof = self.criterion(tof_pred, tof_true)
+        c_stack = torch.stack(sos_list, dim=0)  # shape = (num_sources, nx, ny)
+        c_avg = c_stack.mean(dim=0)
+        loss_sos = self.criterion(c_avg, c_true)
 
-            tw = 0 #_balance_order_of_magnitude(loss_sos, loss_tof)
-            cw = 0  # _balance_order_of_magnitude( loss_tof ,loss_sos)
-            pw = 1
+        loss_tof_total /= num_sources
+        loss_bc_total /= num_sources
+        pde_loss_total /= num_sources  # average across sources
 
-            data_loss += (cw*loss_sos + tw*loss_tof)
-            pde_loss = self.eikonal_loss(tof_pred, sos_pred)
-            print(pde_loss)
+        #tw, cw, pw = _balance_weights(loss_tof_total, loss_sos, pde_loss_total)
+        tw, cw, pw, bw =  _balance_weights(loss_tof_total, loss_sos, pde_loss_total, loss_bc_total)
+
+        data_loss = tw*loss_tof_total +  cw * loss_sos
+        total_loss = data_loss + pw * pde_loss_total + bw * loss_bc_total
+
+        log_message(f"---total_loss:{total_loss}  loss_c: {loss_sos} loss_tof:{loss_tof_total} pde_loss:{pde_loss_total} bc_loss:{loss_bc_total} bw:{bw} cw:{cw} tw:{tw} pw:{pw}")
 
 
-        #print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
-        #print(f"sos_pred min{torch.min(sos_pred)} max{torch.max(sos_pred)} mean:{torch.mean(sos_pred)}")
-        log_message(f"--- data loss:{data_loss}  loss_c: {loss_sos} loss_tof:{loss_tof} pde_loss:{pde_loss} cw:{cw} tw:{tw}")
+        return total_loss, data_loss, pde_loss_total, pde_loss_total
 
-        weighted_pde_loss = 0
-        weighted_bc_loss = 0
-        total_loss = data_loss +weighted_pde_loss + weighted_bc_loss
+    def eval_model(self, batch):
+        sources_positions = batch['x_s'].squeeze()
+        receivers_positions = batch['x_r'].squeeze()
+        tof = batch['raw_tof'].squeeze().float().to(self.device)
+        if not self.gd.initialized:
+            self.gd.build(sources_positions, receivers_positions)
 
-        return total_loss, data_loss, weighted_pde_loss, weighted_bc_loss
+        num_sources = 10
+        sos_list = []
+        selected_sources = random.sample(range(32), k=num_sources)
+        for i, data in self.gd.get_graph(tof, selected_sources, self.device):
+            pred = self.model(data.x, data.edge_index)
+            sos_i = self._extract_sos(pred)
+            sos_list.append(sos_i)
+
+        c_stack = torch.stack(sos_list, dim=0)  # shape = (num_sources, nx, ny)
+        c_avg = c_stack.mean(dim=0)
+        c_pred = np.expand_dims(np.expand_dims(c_avg.cpu(), axis=0), axis=0)
+        c_pred = (c_pred - app_settings.min_sos) / (app_settings.max_sos - app_settings.min_sos)
+        return c_pred
+
+
+    def get_model_input_data(self, batch):
+        sources_positions = batch['x_s'].squeeze()
+        receivers_positions = batch['x_r'].squeeze()
 
     def eikonal_loss(self, T, c):
         eps = 1e-8
 
         dy, dx = torch.gradient(
             T,
-            spacing=(1.0, 1.0)
+            spacing=(1.0 , 1.0)
         )
         grad_mag = torch.sqrt(dx ** 2 + dy ** 2 + eps)
         residual = grad_mag - 1.0 / (c + eps)
         return torch.mean(residual ** 2)
 
+    def _extract_sos(self, pred):
+        # T = pred[:, 0]
+        # c = pred[:, 1]
+        # Indices 64: onward  (after 32 sources and 32 receivers are the mesh nodes)
+        mesh_c_2D = pred[:, 1][64:].reshape(self.nx, self.ny) # all interior mesh node
+        return mesh_c_2D
 
 
     def _extract_tof_sos(self, pred):
         # T = pred[:, 0]
         # c = pred[:, 1]
         # Indices 64: onward  (after 32 sources and 32 receivers are the mesh nodes)
-        mesh_T_2D = pred[:, 0][64:].reshape(self.nx, self.ny)
-        mesh_c_2D = pred[:, 1][64:].reshape(self.nx, self.ny)
-        return mesh_T_2D, mesh_c_2D
+        boundary = pred[:, 0][32:64]  # receiver nodes
+        mesh_T_2D = pred[:, 0][64:].reshape(self.nx, self.ny)  # all interior mesh node
+        mesh_c_2D = pred[:, 1][64:].reshape(self.nx, self.ny) # all interior mesh node
+        return boundary, mesh_T_2D, mesh_c_2D
 
     def _get_region_of_interest(self ,d):
         x1, x2 = self.x_range  # (32, 96)
@@ -211,6 +262,14 @@ class TOFtoSOSPINNLinerTrainingStep(BaseTrainingStep):
             h, w = c_true.shape
             c_pred = c_pred.reshape(h, w)
             return self.data_loss( c_pred, c_true)
+
+    def eval_model(self, batch):
+        selected_sources, x, y, tof_val = self.training_step_handler.get_model_input_data(batch)
+        c_pred = self.model(x, y, tof_val)
+        _, _, h, w = anatomy.shape
+        c_pred = np.expand_dims(np.expand_dims(c_pred.reshape(h, w).cpu(), axis=0), axis=0)
+        c_pred = (c_pred - app_settings.min_sos) / (app_settings.max_sos - app_settings.min_sos)
+        return c_pred
 
     def get_model_input_data(self, batch):
         all_tof_maps = batch['tof_maps'].squeeze()
@@ -536,3 +595,20 @@ def _compute_laplacian_loss(c_pred, X, Y):
     laplacian_loss = torch.mean(T_xx ** 2 + T_yy ** 2)
     return laplacian_loss
 
+
+def _balance_weights(loss_tof, loss_sos, loss_pde,loss_bc):
+    wt = 1.0 / (loss_tof.detach() + 1e-8)
+    ws = 1.0 / (loss_sos.detach() + 1e-8)
+    wp = 1.0 / (loss_pde + 1e-8)
+    wb = 1.0 / (loss_bc.detach() + 1e-8)
+
+
+
+    # Then scale so sum of weights = 1 or some constant
+    sum_w = wt + ws + wb + wp
+    wt /= sum_w
+    ws /= sum_w
+    wp /= sum_w
+    wb /= sum_w
+    #return wt, ws, wp, wb
+    return wt, ws, wp, wb

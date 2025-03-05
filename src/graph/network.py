@@ -8,6 +8,7 @@ class GraphDataset:
     def __init__(self, **kwargs):
 
         self.c_init = kwargs.get('c_init', 0.12)
+        self.epsilon = 1e-8
         self.x_range = kwargs.get('x_range', (32, 96))
         self.y_range = kwargs.get('y_range', (32, 96))
         self.nx = kwargs.get('nx', 64)
@@ -22,11 +23,10 @@ class GraphDataset:
 
     def build(self, sources_positions, receivers_positions):
         mesh_positions, mesh_edges = self._create_interior_mesh()
+        sources_to_mesh_edges = self._connect_sensors_to_mesh(sources_positions, mesh_positions,group='S' , k=32)
+        mesh_to_receivers_edges = self._connect_sensors_to_mesh(receivers_positions, mesh_positions, group='R', k=32)
 
-        sources_to_mesh_edges = self._connect_sensors_to_mesh(sources_positions, mesh_positions,group='S' ,k=2)
-        mesh_to_receivers_edges = self._connect_sensors_to_mesh(receivers_positions, mesh_positions, group='R', k=2)
-
-        self.edges = np.concatenate((sources_to_mesh_edges, mesh_edges, mesh_to_receivers_edges))
+        self.edges = np.unique(np.concatenate((sources_to_mesh_edges, mesh_edges, mesh_to_receivers_edges)),  axis=0)
         self.positions = np.concatenate((sources_positions, receivers_positions, mesh_positions))
         self.initialized = True
 
@@ -65,17 +65,21 @@ class GraphDataset:
 
             # Set the entire SoS layer (column=1) to c_init
             x_init[:, 1] = self.c_init
+            #x_init[:, 0] = torch.norm(self.positions - self.positions[i], dim=1) + self.epsilon
+            x_init[:, 0] = self.epsilon
+            print(x_init[:, 0])
+            exit()
 
             # The T layer (column=0) is zero by default for all nodes...
             # except for the receiver nodes for the *active* source i:
             # receiver nodes are in range [self.num_source_nodes .. self.num_source_nodes+self.num_receiver_nodes-1]
             for j in range(self.num_receiver_nodes):
                 receiver_node_idx = self.num_source_nodes + j
-                x_init[receiver_node_idx, 0] = tof_matrix[i, j]
+                x_init[receiver_node_idx, 0] = tof_matrix[i, j].item()
                 # This sets T = ToF(source i -> receiver j) on the j-th receiver node.
 
             # mark the source node with tof =1 (the rest are zeroes)
-            x_init[source_node_idx, 0] = 1
+            x_init[source_node_idx, 0] = 1.0
 
             # The mesh nodes remain T=0; the sources remain T=0 as well.
 
@@ -100,8 +104,7 @@ class GraphDataset:
                 positions.append((x_values[i], y_values[j]))
         positions = np.array(positions, dtype=np.float32)
 
-        # Build k-NN edges (say k=8) using cKDTree
-        k = 8
+        k = 5
         tree = cKDTree(positions)
         edges = []
 
@@ -117,47 +120,7 @@ class GraphDataset:
         return positions, edges
 
 
-    def DEP_create_interior_mesh(self):
-        """
-        Creates a 2D grid of interior (virtual) nodes in the domain.
 
-        Args:
-            nx (int): Number of grid points along x-axis (interior).
-            ny (int): Number of grid points along y-axis (interior).
-            x_range (tuple): (xmin, xmax) domain limits in x.
-            y_range (tuple): (ymin, ymax) domain limits in y.
-
-        Returns:
-            (positions, edges):
-                positions -> (N, 2) array of (x, y) coordinates for interior nodes
-                edges -> list of (i, j) pairs denoting adjacency in the mesh
-        """
-        x_values = np.linspace(self.x_range[0], self.x_range[1], self.nx)
-        y_values = np.linspace(self.y_range[0], self.y_range[1], self.ny)
-
-        # Generate grid positions
-        positions = []
-        for i in range(self.nx):
-            for j in range(self.ny):
-                positions.append((x_values[i], y_values[j]))
-        positions = np.array(positions, dtype=np.float32)
-
-        # Create edges between neighboring grid cells (4-neighbors)
-        edges = []
-
-        def node_index(i, j):
-            return i * self.ny + j + self.num_sensor_nodes
-
-        for i in range(self.nx):
-            for j in range(self.ny):
-                if i + 1 < self.nx:  # Right neighbor 2 way
-                    edges.append((node_index(i, j), node_index(i + 1, j)))
-                    edges.append((node_index(i + 1, j),node_index(i, j), ))
-                if j + 1 < self.ny:  # Down neighbor 2 way
-                    edges.append((node_index(i, j), node_index(i, j + 1)))
-                    edges.append((node_index(i, j + 1), node_index(i, j)))
-        edges = np.array(edges, dtype=np.int64)
-        return positions, edges
 
     def _connect_sensors_to_mesh(self, sensor_positions, mesh_positions, group, k=1):
         """
@@ -183,8 +146,9 @@ class GraphDataset:
                 indices = [indices]  # ensure iterable
             for idx in indices:
                 offset = 0 if group=='S' else self.num_source_nodes
-                sensor_to_mesh_edges.append((s_idx+offset, idx + self.num_sensor_nodes-1))  # sensor -> mesh
-                sensor_to_mesh_edges.append((idx + self.num_sensor_nodes-1, s_idx+offset))  # mesh -> sensor
+                sensor_to_mesh_edges.append((s_idx+offset, idx + self.num_sensor_nodes))  # sensor -> mesh
+                sensor_to_mesh_edges.append((idx + self.num_sensor_nodes, s_idx+offset))  # mesh -> sensor
 
 
         return sensor_to_mesh_edges
+

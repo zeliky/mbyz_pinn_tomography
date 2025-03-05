@@ -5,15 +5,17 @@ from train import PINNTrainer
 from models.pinn_linear import TOFtoSOSPINNLinerModel
 from models.pinn_combined import CombinedSosTofModel
 from models.resnet_ltsm import   TofToSosUNetModel
-from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTrainingStep, TOFtoSOSPINNLinerTrainingStep
+from models.resnet_ltsm import   TofToSosUNetModel
+from models.gat import DualHeadGATModel
+from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTrainingStep, TOFtoSOSPINNLinerTrainingStep ,DualHeadGATTrainingStep
 from models.eikonal_solver import EikonalSolverMultiLayer
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-checkpoint_path = 'TOFtoSOSPINNLinerModel.2025_02_16_16_53_07_588042-1.pth'
+checkpoint_path = 'DualHeadGATModel.2025_03_05_23_26_16_364300-0.pth'
 
 
-trainer = PINNTrainer(model=TOFtoSOSPINNLinerModel(app_settings.sources_amount),
-                          training_step_handler=TOFtoSOSPINNLinerTrainingStep(),
+trainer = PINNTrainer(model=DualHeadGATModel(),
+                          training_step_handler=DualHeadGATTrainingStep(),
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['test'])
     )
