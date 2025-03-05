@@ -98,12 +98,12 @@ class TofDataset(Dataset):
             'anatomy': anatomy_img,
             'tof': tof_img,
             'sos': mat_data['sos'],
-            #'raw_tof': mat_data['raw_tof'],
+            'raw_tof': mat_data['raw_tof'],
             #'raw_sos': mat_data['V'],
-            'expanded_tof': mat_data['expanded_tof'],
+            #'expanded_tof': mat_data['expanded_tof'],
             'tof_maps': mat_data['tof_maps'],
-            #'x_s': mat_data['x_s'],
-            #'x_r': mat_data['x_r'],
+            'x_s': mat_data['x_s'],
+            'x_r': mat_data['x_r'],
         }
 
 

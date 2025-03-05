@@ -5,6 +5,7 @@ scipy
 opencv-python
 torch
 torchvision
+torch_geometric
 pandas
 mpld3
 tqdm

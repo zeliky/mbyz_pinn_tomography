@@ -9,8 +9,9 @@ from models.resnet_ltsm import TofToSosUNetModel
 from models.pinn_linear import TOFtoSOSPINNLinerModel
 from models.pinn_unet import MultiSourceTOFModel
 from models.pinn_combined import CombinedSosTofModel
+from models.gat import DualHeadGAT
 from training_steps_handlers import (TofToSosUNetTrainingStep, TofPredictorTrainingStep, CombinedSosTofTrainingStep,
-                                     TOFtoSOSPINNLinerTrainingStep)
+                                     TOFtoSOSPINNLinerTrainingStep, DualHeadGATTrainingStep)
 import os
 import time
 from TimeMeasurement.time_measurement import convert
@@ -23,8 +24,28 @@ sos_checkpoint_path = None
 tof_checkpoint_path = None
 multi_tof_checkpoint_path = None
 combined_checkpoint_path = None
+gat_tof_sos_checkpoint_path = None
 
+def train_gat_tof_sos_predictor():
+    global gat_tof_sos_checkpoint_path
+    epochs = 30
 
+    trainer = PINNTrainer(model=DualHeadGAT(),
+                          training_step_handler=DualHeadGATTrainingStep(),
+                          batch_size=1,
+                          train_dataset=TofDataset(['train']),
+                          val_dataset=TofDataset(['validation']),
+                          epochs=epochs,
+                          lr=1e-4
+                          )
+    if gat_tof_sos_checkpoint_path is not None:
+        trainer.load_checkpoint(multi_tof_checkpoint_path)
+    trainer.train_model()
+    log_message(' ')
+
+    trainer.visualize_training_and_validation()
+
+    log_message("[main.py] Training pipeline complete.")
 
 def train_multitof_to_sos_predictor():
     global multi_tof_checkpoint_path
@@ -118,7 +139,8 @@ if __name__ == "__main__":
     #train_sos_predictor()
     #train_tof_predictor()
     #train_combined_model()
-    train_multitof_to_sos_predictor()
+    #train_multitof_to_sos_predictor()
+    train_gat_tof_sos_predictor()
     # Measure time
     et = time.process_time()
     res = et - st

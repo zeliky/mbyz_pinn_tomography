@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch
 import numpy as np
 from physics import Solver, eikonal_loss_multi, eikonal_loss, initial_loss, boundary_loss,_to_mps
+from graph.network import GraphDataset
 from logger import log_message, log_image
 from settings import  app_settings
 import random
@@ -93,6 +94,125 @@ class MultiRangeWeightedMSELoss(nn.Module):
 
 
 
+class DualHeadGATTrainingStep(BaseTrainingStep):
+    def __init__(self, ** kwargs):
+        super().__init__()
+        c_init = kwargs.get('c_init', 0.12)
+        self.x_range = kwargs.get('x_range', (32, 96))
+        self.y_range = kwargs.get('y_range', (32, 96))
+        self.nx = kwargs.get('nx', 64)
+        self.ny = kwargs.get('ny', 64)
+
+        self.gd = GraphDataset(c_init=c_init,x_range=self.x_range,y_range=self.y_range, nx=self.nx, ny=self.ny)
+
+
+    def perform_step(self, batch):
+        sources_positions = batch['x_s'].squeeze()
+        receivers_positions = batch['x_r'].squeeze()
+        tof = batch['raw_tof'].squeeze()
+        all_tof_maps = batch['tof_maps'].squeeze().float().to(self.device)
+        sos = batch['sos'].squeeze().float().to(self.device)
+        c_true = self._get_region_of_interest(sos)
+        # build the source graph only once
+        if not self.gd.initialized:
+            self.gd.build(sources_positions, receivers_positions)
+
+        num_sources = 5
+        selected_sources = random.sample(range(32), k=num_sources)
+
+        data_loss = 0
+
+        for i, data in self.gd.get_graph(tof, selected_sources, self.device):
+            pred = self.model(data.x, data.edge_index)
+            tof_pred, sos_pred = self._extract_tof_sos(pred)
+
+            tof_true = self._get_region_of_interest(all_tof_maps[i])
+            #print(f"tof_true min{torch.min(tof_true)} max{torch.max(tof_true)} mean:{torch.mean(tof_true)}")
+            #print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
+            #print(f"c_true min{torch.min(c_true)} max{torch.max(c_true)} mean:{torch.mean(c_true)}")
+            #print(f"sos_pred min{torch.min(sos_pred)} max{torch.max(sos_pred)} mean:{torch.mean(sos_pred)}")
+
+            loss_sos = self.criterion(sos_pred, c_true)
+            loss_tof = self.criterion(tof_pred, tof_true)
+
+            tw = 0 #_balance_order_of_magnitude(loss_sos, loss_tof)
+            cw = 0  # _balance_order_of_magnitude( loss_tof ,loss_sos)
+            pw = 1
+
+            data_loss += (cw*loss_sos + tw*loss_tof)
+            #pde_loss = self.eikonal_loss(pred, data.edge_index, data.pos)
+            #print(pde_loss)
+
+
+        #print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
+        #print(f"sos_pred min{torch.min(sos_pred)} max{torch.max(sos_pred)} mean:{torch.mean(sos_pred)}")
+        log_message(f"--- data loss:{data_loss}  loss_c: {loss_sos} loss_tof:{loss_tof} pde_loss:{pde_loss} cw:{cw} tw:{tw}")
+
+        weighted_pde_loss = 0
+        weighted_bc_loss = 0
+        total_loss = data_loss +weighted_pde_loss + weighted_bc_loss
+
+        return total_loss, data_loss, weighted_pde_loss, weighted_bc_loss
+
+    def eikonal_loss(self,pred, edge_index, node_positions):
+        """
+        Eikonal loss on a grid or graph:
+          pred: (N, 2) => pred[:,0]= T, pred[:,1]= c
+          edge_index: (2, E) => adjacency
+          node_positions: (N,2) => (x,y) coords
+          boundary_mask: (N,) bool => which nodes are boundary nodes
+          boundary_T: (N,) => known times at boundary
+
+        returns: total_loss, eikonal_term, boundary_term
+        """
+
+        T = pred[:, 0]
+        c = pred[:, 1]
+
+        # Eikonal PDE residual: ||∇T| - 1/c|
+        # We'll do a quick approach for an unstructured graph:
+        # For each edge (i,j), approximate partial derivative.
+        # Then accumulate an error = (|grad T_i| - 1/c_i)^2.
+
+        # (A more correct approach would carefully define node-based gradient, or do PDE forward solves.)
+
+        eik_loss = 0.0
+
+        # Summation over edges
+        # We'll approximate gradient at node i by difference with node j
+        # in the direction i->j
+        for i, j in edge_index.t():
+            # distance
+            dist = torch.norm(node_positions[i] - node_positions[j], p=2)
+            # approximate directional derivative
+            dT = (T[j] - T[i]) / (dist + 1e-8)  # derivative along edge
+            # magnitude in a 1D sense
+            # We'll just approximate grad T_i ~ dT
+            # Then eikonal residual: |dT| - 1/c_i
+            eik_term = (torch.abs(dT) - 1.0 / (c[i] + 1e-8)) ** 2
+            eik_loss += eik_term
+
+        eik_loss = eik_loss / edge_index.shape[1]  # average over edges
+        print(eik_loss)
+        return eik_loss
+
+    def _extract_tof_sos(self, pred):
+        # T = pred[:, 0]
+        # c = pred[:, 1]
+        # Indices 64: onward  (after 32 sources and 32 receivers are the mesh nodes)
+        mesh_T_2D = pred[:, 0][64:].reshape(self.nx, self.ny)
+        mesh_c_2D = pred[:, 1][64:].reshape(self.nx, self.ny)
+        return mesh_T_2D, mesh_c_2D
+
+    def _get_region_of_interest(self ,d):
+        x1, x2 = self.x_range  # (32, 96)
+        y1, y2 = self.y_range  # (32, 96)
+        return d[x1:x2, y1:y2]
+
+    def get_model_input_data(self, batch):
+        pass
+
+
 class TOFtoSOSPINNLinerTrainingStep(BaseTrainingStep):
     def __init__(self):
         super().__init__()
@@ -157,17 +277,6 @@ class TOFtoSOSPINNLinerTrainingStep(BaseTrainingStep):
             loss_tof = torch.mean((T_pred - tof_map) ** 2) / (torch.var(tof_map) + self.epsilon)
 
 
-       
-
-
-
-
-
-
-
-
-
-
         # Smoothness regularization
         loss_smooth = torch.mean(torch.abs(torch.gradient(c_pred)[0]))
 
@@ -181,10 +290,10 @@ class TOFtoSOSPINNLinerTrainingStep(BaseTrainingStep):
         w_tof =  max(_balance_order_of_magnitude(mse_loss, loss_tof),0.1)
         w_smooth = max(_balance_order_of_magnitude(w_eik*loss_eikonal, loss_smooth) / 10, 0.0001)
 
-        #w_eik = 0
-        w_tof = 0
-        w_smooth = 0
-        w_mse = 1
+        #w_eik = 1
+        #w_tof = 1
+        #w_smooth = 1
+        #w_mse = 1
         loss_total = w_mse*mse_loss + w_eik*loss_eikonal + w_tof * loss_tof + w_smooth * loss_smooth
 
 

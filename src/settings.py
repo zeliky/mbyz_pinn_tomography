@@ -10,7 +10,7 @@ class AppSettings:
 
     anatomy_width: int = 128
     anatomy_height: int= 128
-    min_sos: float=0.115
+    min_sos: float=0.119
     max_sos: float=0.17
     min_tof: float=0.0
     max_tof: float=1000.0
