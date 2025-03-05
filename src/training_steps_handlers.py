@@ -140,8 +140,8 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
             pw = 1
 
             data_loss += (cw*loss_sos + tw*loss_tof)
-            #pde_loss = self.eikonal_loss(pred, data.edge_index, data.pos)
-            #print(pde_loss)
+            pde_loss = self.eikonal_loss(tof_pred, sos_pred)
+            print(pde_loss)
 
 
         #print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
@@ -154,47 +154,18 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
 
         return total_loss, data_loss, weighted_pde_loss, weighted_bc_loss
 
-    def eikonal_loss(self,pred, edge_index, node_positions):
-        """
-        Eikonal loss on a grid or graph:
-          pred: (N, 2) => pred[:,0]= T, pred[:,1]= c
-          edge_index: (2, E) => adjacency
-          node_positions: (N,2) => (x,y) coords
-          boundary_mask: (N,) bool => which nodes are boundary nodes
-          boundary_T: (N,) => known times at boundary
+    def eikonal_loss(self, T, c):
+        eps = 1e-8
 
-        returns: total_loss, eikonal_term, boundary_term
-        """
+        dy, dx = torch.gradient(
+            T,
+            spacing=(1.0, 1.0)
+        )
+        grad_mag = torch.sqrt(dx ** 2 + dy ** 2 + eps)
+        residual = grad_mag - 1.0 / (c + eps)
+        return torch.mean(residual ** 2)
 
-        T = pred[:, 0]
-        c = pred[:, 1]
 
-        # Eikonal PDE residual: ||∇T| - 1/c|
-        # We'll do a quick approach for an unstructured graph:
-        # For each edge (i,j), approximate partial derivative.
-        # Then accumulate an error = (|grad T_i| - 1/c_i)^2.
-
-        # (A more correct approach would carefully define node-based gradient, or do PDE forward solves.)
-
-        eik_loss = 0.0
-
-        # Summation over edges
-        # We'll approximate gradient at node i by difference with node j
-        # in the direction i->j
-        for i, j in edge_index.t():
-            # distance
-            dist = torch.norm(node_positions[i] - node_positions[j], p=2)
-            # approximate directional derivative
-            dT = (T[j] - T[i]) / (dist + 1e-8)  # derivative along edge
-            # magnitude in a 1D sense
-            # We'll just approximate grad T_i ~ dT
-            # Then eikonal residual: |dT| - 1/c_i
-            eik_term = (torch.abs(dT) - 1.0 / (c[i] + 1e-8)) ** 2
-            eik_loss += eik_term
-
-        eik_loss = eik_loss / edge_index.shape[1]  # average over edges
-        print(eik_loss)
-        return eik_loss
 
     def _extract_tof_sos(self, pred):
         # T = pred[:, 0]
