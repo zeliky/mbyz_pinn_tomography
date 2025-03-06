@@ -11,7 +11,7 @@ from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTr
 from models.eikonal_solver import EikonalSolverMultiLayer
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-checkpoint_path = 'DualHeadGATModel.2025_03_05_23_26_16_364300-0.pth'
+checkpoint_path = 'DualHeadGATModel.2025_03_06_23_46_59_997478-0.pth'
 
 
 trainer = PINNTrainer(model=DualHeadGATModel(),
@@ -20,5 +20,7 @@ trainer = PINNTrainer(model=DualHeadGATModel(),
                           val_dataset=TofDataset(['test'])
     )
 
-trainer.load_checkpoint(checkpoint_path)
-trainer.visualize_predictions( num_samples=20)
+#trainer.load_checkpoint(checkpoint_path)
+#trainer.visualize_predictions( num_samples=20)
+
+trainer.visualize_tof( num_samples=32)

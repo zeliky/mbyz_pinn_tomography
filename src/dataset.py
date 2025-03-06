@@ -66,6 +66,7 @@ class TofDataset(Dataset):
         return len(self.files_index)
 
     def __getitem__(self, idx):
+        print(f"__getitem__{idx}")
         entry = self.files_index[idx]
         anatomy_dimensions = (int(self.anatomy_height), int(self.anatomy_width))
         tof_dimensions = (int(self.sources_amount), int(self.receivers_amount))

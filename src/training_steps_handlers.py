@@ -121,7 +121,7 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
         if not self.gd.initialized:
             self.gd.build(sources_positions, receivers_positions)
 
-        num_sources = 15
+        num_sources = 10
         selected_sources = random.sample(range(32), k=num_sources)
 
 
@@ -130,39 +130,38 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
         loss_bc_total = 0.0
         pde_loss_total = 0.0
         for i, data in self.gd.get_graph(tof, selected_sources, self.device):
-            pred = self.model(data.x, data.edge_index)
+            pred = self.model(data.x, data.edge_index, self.gd.fixed_tof_mask)
             boundary ,tof_pred, sos_pred = self._extract_tof_sos(pred)
-
             sos_list.append(sos_pred)
 
-            T_true = self._get_region_of_interest(all_tof_maps[i])
-            #compare between tof[i,:] (values on receivers and predicted value on receivers
-            #print(boundary)
-            #print(tof[i,:])
+            T_true = self._get_region_of_interest(all_tof_maps[i].T)
+            # ompare between tof[i,:] (values on receivers and predicted value on receivers
             bc_loss_i = self.criterion(boundary, tof[i,:])
             loss_bc_total += bc_loss_i
 
+            # consider TOF values that receive messages
             loss_tof_i = self.criterion(tof_pred, T_true)
             loss_tof_total += loss_tof_i
 
             pde_loss_total += self.eikonal_loss(tof_pred, sos_pred)
             #print(sos_pred)
-            #print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
+            print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
             #print(f"-- sos_pred min{torch.min(sos_pred)} max{torch.max(sos_pred)} mean:{torch.mean(sos_pred)}")
-            #print(f"- tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
-            #print(f"- boundary min{torch.min(boundary)} max{torch.max(boundary)} mean:{torch.mean(boundary)}")
+            if torch.mean(tof_pred) == 0:
+                print(f"ERROR!!!!- tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
+                exit()
+            print(f"- boundary min{torch.min(boundary)} max{torch.max(boundary)} mean:{torch.mean(boundary)}")
             #print(f"+ tof_true min{torch.min(T_true)} max{torch.max(T_true)} mean:{torch.mean(T_true)}")
 
         c_stack = torch.stack(sos_list, dim=0)  # shape = (num_sources, nx, ny)
-        c_avg = c_stack.mean(dim=0)
-        loss_sos = self.criterion(c_avg, c_true)
+        sos_pred = c_stack.mean(dim=0)
+        loss_sos = self.criterion(sos_pred, c_true)
 
-        loss_tof_total /= num_sources
-        loss_bc_total /= num_sources
-        pde_loss_total /= num_sources  # average across sources
+        #loss_tof_total /= num_sources
+        #loss_bc_total /= num_sources
+        #pde_loss_total /= num_sources  # average across sources
 
-        #tw, cw, pw = _balance_weights(loss_tof_total, loss_sos, pde_loss_total)
-        tw, cw, pw, bw =  _balance_weights(loss_tof_total, loss_sos, pde_loss_total, loss_bc_total)
+        tw, cw, pw, bw = _balance_weights(loss_tof_total, loss_sos, pde_loss_total, loss_bc_total)
 
         data_loss = tw*loss_tof_total +  cw * loss_sos
         total_loss = data_loss + pw * pde_loss_total + bw * loss_bc_total
@@ -183,7 +182,7 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
         sos_list = []
         selected_sources = random.sample(range(32), k=num_sources)
         for i, data in self.gd.get_graph(tof, selected_sources, self.device):
-            pred = self.model(data.x, data.edge_index)
+            pred = self.model(data.x, data.edge_index, self.gd.fixed_tof_mask)
             sos_i = self._extract_sos(pred)
             sos_list.append(sos_i)
 
@@ -192,6 +191,37 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
         c_pred = np.expand_dims(np.expand_dims(c_avg.cpu(), axis=0), axis=0)
         c_pred = (c_pred - app_settings.min_sos) / (app_settings.max_sos - app_settings.min_sos)
         return c_pred
+
+
+    def eval_tof(self, batch):
+        tofs_true, tofs_pred = [],[]
+        sources_positions = batch['x_s'].squeeze()
+        receivers_positions = batch['x_r'].squeeze()
+        all_tof_maps = batch['tof_maps'].squeeze().float()
+        tof = batch['raw_tof'].squeeze().float().to(self.device)
+        if not self.gd.initialized:
+            self.gd.build(sources_positions, receivers_positions)
+        num_sources = 10
+        selected_sources = range(32)
+        for i, data in self.gd.get_graph(tof, selected_sources, self.device):
+            pred = self.model(data.x, data.edge_index, self.gd.fixed_tof_mask)
+
+            boundary, tof_pred, sos_pred = self._extract_tof_sos(pred)
+            print('boundary')
+            print(boundary.tolist())
+            print('tof i')
+            print(tof[i,:].tolist())
+
+            tof_pred = self._extract_tof(pred)
+            tof_pred = tof_pred.cpu()
+            tofs_pred.append(tof_pred)
+
+            tof_true = all_tof_maps[i].T
+            tof_pred = tof_true.cpu()
+            tofs_true.append(tof_pred)
+
+        return  tofs_true, tofs_pred
+
 
 
     def get_model_input_data(self, batch):
@@ -215,6 +245,13 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
         # Indices 64: onward  (after 32 sources and 32 receivers are the mesh nodes)
         mesh_c_2D = pred[:, 1][64:].reshape(self.nx, self.ny) # all interior mesh node
         return mesh_c_2D
+
+    def _extract_tof(self, pred):
+        # T = pred[:, 0]
+        # c = pred[:, 1]
+        # Indices 64: onward  (after 32 sources and 32 receivers are the mesh nodes)
+        mesh_T_2D = pred[:, 0][64:].reshape(self.nx, self.ny) # all interior mesh node
+        return mesh_T_2D
 
 
     def _extract_tof_sos(self, pred):
@@ -597,10 +634,30 @@ def _compute_laplacian_loss(c_pred, X, Y):
 
 
 def _balance_weights(loss_tof, loss_sos, loss_pde,loss_bc):
+
+    if loss_bc> 1600 or loss_tof > 1000:
+        pow = -1 * math.ceil(math.log10(loss_tof)) + random.randint(-5,0)
+        wt = 10 ** pow
+
+        pow = -1 * math.ceil(math.log10(loss_sos)) + random.randint(-5,0)
+        ws = 10 ** pow
+
+        pow = -1 * math.ceil(math.log10(loss_pde)) + random.randint(-5, 0)
+        wp = 10 ** pow
+
+        #pow = -1 * math.ceil(math.log10(loss_bc)) + random.randint(-5, 0)
+        pow = -1 * math.ceil(math.log10(loss_bc))
+        wb = 10 ** pow
+
+        #return wt, ws, wp, wb
+        return wt, 0, 0, wb
+
+
     wt = 1.0 / (loss_tof.detach() + 1e-8)
     ws = 1.0 / (loss_sos.detach() + 1e-8)
     wp = 1.0 / (loss_pde + 1e-8)
     wb = 1.0 / (loss_bc.detach() + 1e-8)
+
 
 
 

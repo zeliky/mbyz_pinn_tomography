@@ -237,6 +237,35 @@ class PINNTrainer:
                         print(f"   reloc:({s_idx}, {r[0]},{r[1]}) k_tof: {k_tof}  p_tof: {p_tof}")
 
 
+    def visualize_tof(self,  num_samples=5):
+        val_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False)
+        self.model.eval()
+        with torch.no_grad():
+            count = 0
+            for batch in val_loader:
+                tofs_true, tofs_pred = self.training_step_handler.eval_tof(batch)
+
+                for tof_pred,tof_true in zip(tofs_pred,tofs_true):
+                    fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+
+                    axs[0].imshow(tof_true.squeeze(0), cmap='jet')
+                    axs[0].set_title('TOF True')
+                    axs[0].axis('off')
+
+
+                    axs[1].imshow(tof_pred.squeeze(0), cmap='jet')
+                    axs[1].set_title('Predicted TOF')
+                    axs[1].axis('off')
+
+
+
+                    #plt.tight_layout()
+                    #plt.show()
+                    log_image(fig)
+                    log_message(' ')
+                    count += 1
+                    if count >= num_samples:
+                        return
     def visualize_predictions(self,  num_samples=5):
         val_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False)
         self.model.eval()

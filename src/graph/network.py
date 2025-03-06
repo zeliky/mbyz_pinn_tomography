@@ -8,26 +8,38 @@ class GraphDataset:
     def __init__(self, **kwargs):
 
         self.c_init = kwargs.get('c_init', 0.12)
-        self.epsilon = 1e-8
+        self.epsilon = 1e-5
         self.x_range = kwargs.get('x_range', (32, 96))
         self.y_range = kwargs.get('y_range', (32, 96))
-        self.nx = kwargs.get('nx', 64)
-        self.ny = kwargs.get('ny', 64)
+        self.nx = kwargs.get('nx', self.x_range[1]-self.x_range[0]+1)
+        self.ny = kwargs.get('ny', self.y_range[1]-self.y_range[0]+1)
         self.num_source_nodes = kwargs.get('num_source_nodes', 32)
         self.num_receiver_nodes = kwargs.get('num_receiver_nodes', 32)
         self.num_mesh_nodes = self.nx * self.ny
         self.num_sensor_nodes = self.num_source_nodes + self.num_receiver_nodes
         self.edges = []
         self.positions = []
+        self.mesh_positions = []
+        self.fixed_tof_mask = []
         self.initialized = False
 
     def build(self, sources_positions, receivers_positions):
         mesh_positions, mesh_edges = self._create_interior_mesh()
-        sources_to_mesh_edges = self._connect_sensors_to_mesh(sources_positions, mesh_positions,group='S' , k=32)
-        mesh_to_receivers_edges = self._connect_sensors_to_mesh(receivers_positions, mesh_positions, group='R', k=32)
 
-        self.edges = np.unique(np.concatenate((sources_to_mesh_edges, mesh_edges, mesh_to_receivers_edges)),  axis=0)
+        rp = {i: receivers_positions[i] for i in range(len(receivers_positions))}
+        mesh_to_receivers_edges = self._connect_sensors_to_mesh(rp, mesh_positions, group='R', k=2)
+
+        self.edges = np.unique(np.concatenate((mesh_edges, mesh_to_receivers_edges)),  axis=0)
+        self.mesh_positions = mesh_positions
         self.positions = np.concatenate((sources_positions, receivers_positions, mesh_positions))
+
+
+        mask = np.zeros(self.positions.shape[0], dtype=bool)
+        start_idx = len(sources_positions)
+        end_idx = start_idx + len(receivers_positions)
+        mask[start_idx:end_idx] = True
+        self.fixed_tof_mask = mask
+
         self.initialized = True
 
     def get_graph(self, tof_matrix, selected_sources, device):
@@ -65,10 +77,11 @@ class GraphDataset:
 
             # Set the entire SoS layer (column=1) to c_init
             x_init[:, 1] = self.c_init
-            #x_init[:, 0] = torch.norm(self.positions - self.positions[i], dim=1) + self.epsilon
-            x_init[:, 0] = self.epsilon
-            print(x_init[:, 0])
-            exit()
+            # print(f"init tof for source {source_node_idx} : {self.positions[source_node_idx]}")
+            distances = np.linalg.norm(self.positions - self.positions[source_node_idx], axis=1) + self.epsilon
+            x_init[:, 0] = torch.from_numpy(distances)*100
+            #x_init[:, 0] = self.epsilon
+
 
             # The T layer (column=0) is zero by default for all nodes...
             # except for the receiver nodes for the *active* source i:
@@ -79,13 +92,19 @@ class GraphDataset:
                 # This sets T = ToF(source i -> receiver j) on the j-th receiver node.
 
             # mark the source node with tof =1 (the rest are zeroes)
-            x_init[source_node_idx, 0] = 1.0
+            x_init[source_node_idx, 0] = 1
 
             # The mesh nodes remain T=0; the sources remain T=0 as well.
 
+            # Add the source edges to the graph
+
+            sources_to_mesh_edges = self._connect_sensors_to_mesh(
+                {source_node_idx:self.positions[source_node_idx]}, self.mesh_positions, group='S' , k=2)
+            #edges = [(source_node_idx, source_node_idx)]
+            edges = np.unique(np.concatenate((sources_to_mesh_edges, self.edges)), axis=0)
             data = Data(
                 x=x_init.to(device),  # (S + R + N, 2) node features
-                edge_index=torch.tensor(self.edges, dtype=torch.long).T.to(device),  # shape (2, E)
+                edge_index=torch.tensor(edges, dtype=torch.long).T.to(device),  # shape (2, E)
                 pos=torch.tensor(self.positions).to(device)
             )
             yield i, data
@@ -104,7 +123,7 @@ class GraphDataset:
                 positions.append((x_values[i], y_values[j]))
         positions = np.array(positions, dtype=np.float32)
 
-        k = 5
+        k = 9
         tree = cKDTree(positions)
         edges = []
 
@@ -139,7 +158,7 @@ class GraphDataset:
         tree = cKDTree(mesh_positions)
         sensor_to_mesh_edges = []
 
-        for s_idx, spos in enumerate(sensor_positions):
+        for s_idx, spos in sensor_positions.items():
             # Find k nearest neighbors in the mesh
             dists, indices = tree.query(spos, k=k)
             if k == 1:

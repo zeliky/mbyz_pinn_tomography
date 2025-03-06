@@ -24,6 +24,8 @@ sos_checkpoint_path = None
 tof_checkpoint_path = None
 multi_tof_checkpoint_path = None
 combined_checkpoint_path = None
+#gat_tof_sos_checkpoint_path = 'bc
+# _ready.pth'
 gat_tof_sos_checkpoint_path = None
 
 def train_gat_tof_sos_predictor():
@@ -39,7 +41,7 @@ def train_gat_tof_sos_predictor():
                           lr=1e-4
                           )
     if gat_tof_sos_checkpoint_path is not None:
-        trainer.load_checkpoint(multi_tof_checkpoint_path)
+        trainer.load_checkpoint(gat_tof_sos_checkpoint_path)
     trainer.train_model()
     log_message(' ')
 

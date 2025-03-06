@@ -5,8 +5,8 @@ from torch_geometric.nn import GATConv
 
 
 class DualHeadGATModel(nn.Module):
-    def __init__(self, in_channels=2, hidden_channels=64, out_channels=2,
-                 num_layers=4, heads=4):
+    def __init__(self,  in_channels=2, hidden_channels=64, out_channels=2,
+                 num_layers=5, heads=8):
         """
         A multi-layer GAT model:
           - num_layers GATConv layers
@@ -41,9 +41,27 @@ class DualHeadGATModel(nn.Module):
 
         self.relu = nn.ReLU()
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, fixed_tof_mask):
+
         x_residual = self.skip(x)  # Preserve input features
+        # x = self.update_tof_in_fmm_order(x, edge_index, fixed_tof_mask)
         for i, conv in enumerate(self.convs):
             x = self.relu(conv(x, edge_index))
+        return x #+ self.relu(x_residual)
 
-        return x+x_residual
+    def update_tof_in_fmm_order(self, x, edge_index, fixed_tof_mask):
+        """
+        Ensure TOF updates in FMM-style wavefront propagation order.
+        """
+        known_tof = x[:, 0].clone()
+        known_tof[~fixed_tof_mask] = float("inf")  # Mark unknown TOF as high
+
+        # Step 2: Iteratively update nearest unknowns first
+        for _ in range(2):  # Control update depth
+            for i, j in edge_index.T:
+                if i < j and fixed_tof_mask[j]:  # If neighbor j has a fixed TOF value
+                    known_tof[i] = min(known_tof[i], known_tof[j] + 1)
+
+        x[:, 0] = known_tof  # Assign TOF back to tensor
+
+        return x
