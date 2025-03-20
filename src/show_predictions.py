@@ -21,6 +21,8 @@ trainer = PINNTrainer(model=DualHeadGATModel(),
     )
 
 #trainer.load_checkpoint(checkpoint_path)
-#trainer.visualize_predictions( num_samples=20)
+trainer.visualize_predictions( num_samples=20)
 
 trainer.visualize_tof( num_samples=32)
+
+

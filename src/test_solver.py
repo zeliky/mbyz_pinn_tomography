@@ -1,126 +1,104 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
-import math
-from dataset import TofDataset
-
-from settings import  app_settings
-from physics import Solver, _to_mps, _to_sec, eikonal_loss_multi
 import matplotlib.pyplot as plt
-from logger import log_image, log_message
+
+from graph.network import GraphDataset
+from models.gat import DualHeadGATModel, SosEstimator
+from dataset import TofDataset
+from logger import log_message, log_image
 import random
-#source= (2,64)
-#solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 dataset = TofDataset(['train'])
-#d = dataset.__getitem__(idx =1)
-
-#sos_pred = _to_mps(d['anatomy']).unsqueeze(0)
-
-#print(f"Speed of sound range: {sos_pred.min().item()} - {sos_pred.max().item()}")
-
-#T_init = torch.full((1, 1, app_settings.anatomy_width,app_settings.anatomy_height), 1e18, device=sos_pred.device)
-#T_init[0, 0, source[0], source[1]] = 0  # Source at zero
-
+data_loader = DataLoader(dataset, batch_size=1, shuffle=True)
+num_samples = 4
+c_init = 0.15
+grid_res = 16
+x_range = (32, 96)
+y_range = (32, 96)
+fmm_iterations = 20
 
 
-"""
-last_s = (None,None)
-for xs,ys,xr,yr,tof in d['known_tof']:
-    new_s = (int(xs), int(ys))
-    if last_s[0]!= new_s[0] or last_s[1]!= new_s[1]:
-        print(new_s)
-        print('----------------------------------')
-        T_init = torch.full((1, 1, app_settings.anatomy_width, app_settings.anatomy_height), 1e18, device=sos_pred.device)
-        T_init[0, 0, new_s[0], new_s[1]] = 0  # Source at zero
-        T = solver(T_init, sos_pred)
-    last_s = new_s
+estimator = SosEstimator(num_nodes=grid_res * grid_res + 64, init_value=c_init, fmm_iterations=fmm_iterations)
+gd = GraphDataset(c_init=c_init, x_range=x_range, y_range=y_range, nx=grid_res, ny=grid_res)
 
-    p = T[0,0,int(xr-1),int(yr-1)].item()
-    r = tof*1e-7
-    diff = (max(p,r)-min(p,r))/max(p,r)*100
-    print(f"{xs},{ys} {xr},{yr}  <=> {tof*1e-7} :  {diff}%")
-#print(T.tolist())
 
-"""
+def visualize_tof(self, num_samples=5):
+    val_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False)
+    self.model.eval()
+    with torch.no_grad():
+        count = 0
+        for batch in val_loader:
+            tofs_true, tofs_pred = self.training_step_handler.eval_tof(batch)
 
-"""
-val_loader = DataLoader(dataset, batch_size=1, shuffle=False)
-for batch in val_loader:
+            for tof_pred, tof_true in zip(tofs_pred, tofs_true):
+                fig, axs = plt.subplots(1, 2, figsize=(8, 4))
 
-    sos_pred = batch['anatomy']
-    sources = batch['x_s']
+                axs[0].imshow(tof_true.squeeze(0), cmap='jet')
+                axs[0].set_title('TOF True')
+                axs[0].axis('off')
 
-    for src in sources[0].squeeze():
-        s = (int(src[0]), int(src[1]))
-        loss = eikonal_loss_multi(sos_pred, solver, s, roi_start=40, roi_end=80, eps=1e-8)
-        print(loss)
+                axs[1].imshow(tof_pred.squeeze(0), cmap='jet')
+                axs[1].set_title('Predicted TOF')
+                axs[1].axis('off')
 
-    break
-"""
+                # plt.tight_layout()
+                # plt.show()
+                log_image(fig)
+                log_message(' ')
+                count += 1
+                if count >= num_samples:
+                    return
 
-"""
-for known_tof in known_tofs:
-    for xs, ys, xr, yr, tof in known_tof:
-        new_s = (int(xs), int(ys))
-        if last_s[0] != new_s[0] or last_s[1] != new_s[1]:
-            print(new_s)
-            print('----------------------------------')
-            e
-        print(xs, ys, xr, yr, tof)
-"""
 
-"""
-solver = Solver()
-device = 'cuda'
-val_loader = DataLoader(dataset, batch_size=1, shuffle=False)
-for b_idx, batch in enumerate(val_loader):
-    tof_tensor = batch['raw_tof'].to(device)
-    sos_pred = batch['anatomy'].to(device)
-    sources = batch['x_s'].to(device)
-    receivers = batch['x_r'].to(device)
+def visualize_sos(anatomy, tof, c_pred):
+    # tof_np = tof[i].cpu().numpy()
+    tof_np = tof.cpu()
+    anatomy_np = anatomy.numpy().squeeze(0).squeeze(0)
 
-    src_tuples = []
-    for src in sources[0].squeeze():
-        src_tuples.append((int(src[0]) - 1, int(src[1]) - 1))
-    rec_tuples = []
-    for rec in receivers[0].squeeze():
-        rec_tuples.append((int(rec[0]) - 1, int(rec[1]) - 1))
 
-    tof = solver.tof_domain(sos=sos_pred, sources=src_tuples, receivers=rec_tuples)
-    print(tof.shape)
-    print(tof.tolist())
-"""
+    # Plot anatomy and c_pred side by side
+    fig, axs = plt.subplots(1, 3, figsize=(8, 4))
 
-num_samples = 10
-val_loader = DataLoader(dataset, batch_size=1, shuffle=False)
+    axs[0].imshow(tof_np, cmap='jet')
+    axs[0].set_title('TOF')
+    axs[0].axis('off')
+
+    axs[1].imshow(anatomy_np, cmap='jet')
+    axs[1].set_title('Original Anatomy')
+    axs[1].axis('off')
+
+    axs[2].imshow(c_pred, cmap='jet')
+    axs[2].set_title('Predicted SoS (c_pred)')
+    axs[2].axis('off')
+
+    # plt.tight_layout()
+    # plt.show()
+    log_image(fig)
+    log_message(' ')
+
 
 count = 0
-for batch in val_loader:
-    tof = batch['tof']
-    anatomy = batch['anatomy']
+for batch in data_loader:
+    sources_positions = batch['x_s'].squeeze()
+    receivers_positions = batch['x_r'].squeeze()
+    tof = batch['raw_tof'].squeeze().float().to(device)
+    anatomy = batch['anatomy'].cpu()
+    s_count, _ = sources_positions.shape
+    r_count, _ = receivers_positions.shape
+    transmitters_indices = torch.arange(0, s_count, device=device)
+    receiver_indices = torch.arange(s_count, s_count + r_count, device=device)
+    if not gd.initialized:
+        gd.build(sources_positions, receivers_positions)
 
-    for i in range(tof.size(0)):
-        tof_np = tof[i]
-        anatomy_np = anatomy[i]
+    selected_sources = random.sample(range(32), k=32)
+    estimator.reset(device)
+    c_pred = None
+    for i, data in gd.get_graph(tof, selected_sources, device):
+        T, c = estimator.estimate(data.x, data.edge_index, data.pos, transmitters_indices, receiver_indices)
 
-
-        # Plot anatomy and c_pred side by side
-        fig, axs = plt.subplots(1, 2, figsize=(8, 4))
-
-        axs[0].imshow(tof_np.squeeze(0), cmap='jet')
-        axs[0].set_title('TOF')
-        axs[0].axis('off')
-
-        axs[1].imshow(anatomy_np.squeeze(0), cmap='gray')
-        axs[1].set_title('Original Anatomy')
-        axs[1].axis('off')
-
-        # plt.tight_layout()
-        # plt.show()
-        log_image(fig)
-        log_message(' ')
-        count+=1
-        if count> num_samples:
-            break
-
+    c_pred = estimator.get_sos(128, 128)
+    visualize_sos(anatomy, tof, c_pred)
+    count += 1
+    if count >= num_samples:
+        break

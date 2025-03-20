@@ -9,7 +9,7 @@ from models.resnet_ltsm import TofToSosUNetModel
 from models.pinn_linear import TOFtoSOSPINNLinerModel
 from models.pinn_unet import MultiSourceTOFModel
 from models.pinn_combined import CombinedSosTofModel
-from models.gat import DualHeadGATModel
+from models.gat import DualHeadGATModel, SosEstimator
 from training_steps_handlers import (TofToSosUNetTrainingStep, TofPredictorTrainingStep, CombinedSosTofTrainingStep,
                                      TOFtoSOSPINNLinerTrainingStep, DualHeadGATTrainingStep)
 import os
@@ -31,9 +31,10 @@ gat_tof_sos_checkpoint_path = None
 def train_gat_tof_sos_predictor():
     global gat_tof_sos_checkpoint_path
     epochs = 30
-
+    grid_res = 16
+    estimator = SosEstimator(num_nodes=grid_res*grid_res+64, init_value=0.15, fmm_iterations=6)
     trainer = PINNTrainer(model=DualHeadGATModel(),
-                          training_step_handler=DualHeadGATTrainingStep(),
+                          training_step_handler=DualHeadGATTrainingStep(estimator, nx=grid_res, ny=grid_res, mnc=20),
                           batch_size=1,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),

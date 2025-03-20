@@ -98,60 +98,79 @@ class MultiRangeWeightedMSELoss(nn.Module):
 
 
 class DualHeadGATTrainingStep(BaseTrainingStep):
-    def __init__(self, ** kwargs):
+    def __init__(self,estimator, ** kwargs):
         super().__init__()
         c_init = kwargs.get('c_init', 0.12)
         self.x_range = kwargs.get('x_range', (32, 96))
         self.y_range = kwargs.get('y_range', (32, 96))
-        self.nx = kwargs.get('nx', 64)
-        self.ny = kwargs.get('ny', 64)
+        self.nx = kwargs.get('nx', 8)
+        self.ny = kwargs.get('ny', 8)
+        self.mnc = kwargs.get('ny', 20)
 
         self.gd = GraphDataset(c_init=c_init,x_range=self.x_range,y_range=self.y_range, nx=self.nx, ny=self.ny)
+        self.estimator = estimator
 
 
     def perform_step(self, batch):
         sources_positions = batch['x_s'].squeeze()
         receivers_positions = batch['x_r'].squeeze()
         tof = batch['raw_tof'].squeeze().float().to(self.device)
+        s_count, _ = sources_positions.shape
+        r_count, _ = receivers_positions.shape
 
-        all_tof_maps = batch['tof_maps'].squeeze().float().to(self.device)
-        sos = batch['sos'].squeeze().float().to(self.device)
-        c_true = self._get_region_of_interest(sos)
+        transmitters_indices = torch.arange(0, s_count, device=self.device)
+        receiver_indices = torch.arange(s_count, s_count + r_count, device=self.device)
+
+        #all_tof_maps = batch['tof_maps'].squeeze().float().to(self.device)
+        #sos = batch['sos'].squeeze().float().to(self.device)
+        #c_true = self._get_region_of_interest(sos)
+
+
         # build the source graph only once
         if not self.gd.initialized:
             self.gd.build(sources_positions, receivers_positions)
 
-        num_sources = 10
-        selected_sources = random.sample(range(32), k=num_sources)
+        selected_sources = random.sample(range(32), k=32)
 
 
         sos_list = []
+        tof_list = []
         loss_tof_total = 0.0
         loss_bc_total = 0.0
         pde_loss_total = 0.0
+
+        self.estimator.reset(self.device)
         for i, data in self.gd.get_graph(tof, selected_sources, self.device):
-            pred = self.model(data.x, data.edge_index, self.gd.fixed_tof_mask)
-            boundary ,tof_pred, sos_pred = self._extract_tof_sos(pred)
-            sos_list.append(sos_pred)
+            T, c = self.estimator.estimate(data.x, data.edge_index, data.pos, transmitters_indices, receiver_indices)
+            #tof_list.append(T)
 
-            T_true = self._get_region_of_interest(all_tof_maps[i].T)
-            # ompare between tof[i,:] (values on receivers and predicted value on receivers
-            bc_loss_i = self.criterion(boundary, tof[i,:])
-            loss_bc_total += bc_loss_i
 
-            # consider TOF values that receive messages
-            loss_tof_i = self.criterion(tof_pred, T_true)
-            loss_tof_total += loss_tof_i
 
-            pde_loss_total += self.eikonal_loss(tof_pred, sos_pred)
-            #print(sos_pred)
-            print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
-            #print(f"-- sos_pred min{torch.min(sos_pred)} max{torch.max(sos_pred)} mean:{torch.mean(sos_pred)}")
-            if torch.mean(tof_pred) == 0:
-                print(f"ERROR!!!!- tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
-                exit()
-            print(f"- boundary min{torch.min(boundary)} max{torch.max(boundary)} mean:{torch.mean(boundary)}")
-            #print(f"+ tof_true min{torch.min(T_true)} max{torch.max(T_true)} mean:{torch.mean(T_true)}")
+        print("!!!Exit on line 147!!!")
+        exit()
+        """
+        pred = self.model(data.x, data.edge_index, data.pos)
+        boundary ,tof_pred, sos_pred = self._extract_tof_sos(pred)
+        sos_list.append(sos_pred)
+
+        T_true = self._get_region_of_interest(all_tof_maps[i].T)
+        # ompare between tof[i,:] (values on receivers and predicted value on receivers
+        bc_loss_i = self.criterion(boundary, tof[i,:])
+        loss_bc_total += bc_loss_i
+
+        # consider TOF values that receive messages
+        loss_tof_i = self.criterion(tof_pred, T_true)
+        loss_tof_total += loss_tof_i
+
+        pde_loss_total += self.eikonal_loss(tof_pred, sos_pred)
+        #print(sos_pred)
+        print(f"tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
+        #print(f"-- sos_pred min{torch.min(sos_pred)} max{torch.max(sos_pred)} mean:{torch.mean(sos_pred)}")
+        if torch.mean(tof_pred) == 0:
+            print(f"ERROR!!!!- tof_pred min{torch.min(tof_pred)} max{torch.max(tof_pred)} mean:{torch.mean(tof_pred)}")
+            exit()
+        print(f"- boundary min{torch.min(boundary)} max{torch.max(boundary)} mean:{torch.mean(boundary)}")
+        #print(f"+ tof_true min{torch.min(T_true)} max{torch.max(T_true)} mean:{torch.mean(T_true)}")
 
         c_stack = torch.stack(sos_list, dim=0)  # shape = (num_sources, nx, ny)
         sos_pred = c_stack.mean(dim=0)
@@ -170,6 +189,8 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
 
 
         return total_loss, data_loss, pde_loss_total, pde_loss_total
+        """
+        return 1e-8,1e-8,1e-8,1e-8
 
     def eval_model(self, batch):
         sources_positions = batch['x_s'].squeeze()
