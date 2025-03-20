@@ -7,7 +7,7 @@ from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTr
 from models.eikonal_solver import EikonalSolverMultiLayer
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-checkpoint_path = 'pinn_tof-predictor_model.2025_01_07_14_41_45_862989-0.pth'
+checkpoint_path = 'pinn_tof-predictor_model.2025_01_08_07_47_32_240866-3.pth'
 
 solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
 solver.to('cpu')

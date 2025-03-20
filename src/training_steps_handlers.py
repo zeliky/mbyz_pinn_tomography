@@ -59,7 +59,7 @@ class TofToSosUNetTrainingStep(BaseTrainingStep):
 
         total_loss = aw*mse_loss +  bw*pde_loss
         #log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
-        log_message(f"total_loss: {total_loss:.4e} ... mse_loss: {aw*mse_loss:.4e} ... pde_loss: {bw*pde_loss:.4e}")
+        log_message(f"[training_steps_handlers.py (perform step ToSos, eidonal_loss_multi)] total_loss: {total_loss:.4e} ... mse_loss: {aw*mse_loss:.4e} ... pde_loss: {bw*pde_loss:.4e}")
         weighted_mse_loss = aw*mse_loss
         weighted_pde_loss = bw*pde_loss
         weighted_bc_loss = 0
@@ -135,7 +135,7 @@ class CombinedSosTofTrainingStep(BaseTrainingStep):
         cw = 1e-2
         total_loss = aw*mse_loss +  bw*total_pde + cw*total_bc
         #log_message(f"total_loss:{total_loss} mse_loss: {mse_loss} pde_loss:{total_pde} bc_loss:{total_bc}")
-        log_message(f"total_loss: {total_loss:.4e} ... mse_loss: {aw*mse_loss:.4e} ... pde_loss: {bw*total_pde:.4e} ... bc_loss: {cw*total_bc:.4e}")
+        log_message(f"[[training_steps_handlers.py (perform step combined)]] total_loss: {total_loss:.4e} ... mse_loss: {aw*mse_loss:.4e} ... pde_loss: {bw*total_pde:.4e} ... bc_loss: {cw*total_bc:.4e}")
         weighted_mse_loss = aw*mse_loss
         weighted_pde_loss = bw*total_pde
         weighted_bc_loss = cw*total_bc

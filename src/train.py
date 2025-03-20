@@ -45,7 +45,7 @@ class PINNTrainer:
     def visualize_training_and_validation(self):
     
         # Plot training and validation losses side-by-side
-
+        print('got here')
         fig, axs = plt.subplots(1, 2, figsize=(8, 4))
 
         # Plot for Loss
@@ -66,6 +66,7 @@ class PINNTrainer:
 
         # Adjust layout and log the figure
         plt.tight_layout()
+        log_message('[train.py] displaying with: visualize_training_and_validation')
         log_image(fig)
         plt.close()
 
@@ -101,6 +102,7 @@ class PINNTrainer:
 
         # Adjust layout and log the figure
         plt.tight_layout()
+        log_message('[train.py] displaying with: visualize_training_and_validation_steps')
         log_image(fig)
         plt.close()
 
@@ -149,10 +151,14 @@ class PINNTrainer:
                     pbar.update(1)
                 
                 log_message(' ')
-                log_message(f'Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss / len(train_loader):.6f}')
+                log_message(f'[train.py] Epoch {epoch + 1}/{num_epochs}, Loss: {epoch_loss / len(train_loader):.6f}')
                 self.visualize_training_and_validation_steps(loss_type = "loss") # for visualization
                 log_message(' ')
             
+            log_message(' ')
+            log_message('[train.py] skiping validation')
+            log_message(' ')
+            """ skip validation 
             # Validation
             self.training_step_handler.set_eval_mode()
             val_loss = 0.0
@@ -180,19 +186,21 @@ class PINNTrainer:
                         pbar.update(1)
 
                     log_message(' ')
-                    log_message(f'Epoch {epoch + 1}/{num_epochs}, Val Loss: {val_loss / len(val_loader):.6f}')
+                    log_message(f'[train.py] Epoch {epoch + 1}/{num_epochs}, Val Loss: {val_loss / len(val_loader):.6f}')
                     self.visualize_training_and_validation_steps("val_loss") # for visualization
                     log_message(' ')
-                    
+            """ 
+            val_loss = 0 # dummy value!!!       
             self.save_state(self.model, optimizer, val_loss, epoch)
             scheduler.step()
 
             self.epochs_vec.append(epoch+1) # for visualization
             self.epoch_loss_vec.append(epoch_loss) # for visualization
             self.epoch_val_loss_vec.append(val_loss / len(val_loader)) # for visualization
+            
         
         self.visualize_training_and_validation() # for visualization
-    
+
 
     def load_checkpoint(self, checkpoint_path):
         checkpoint_path = f"{app_settings.output_folder}/{checkpoint_path}"
@@ -209,7 +217,7 @@ class PINNTrainer:
             'epoch': epoch,
             'loss': loss,
         }, save_path)
-        log_message(f"Model saved to {save_path}")
+        log_message(f"[train.py] Model saved to {save_path}")
 
     def check_tof(self, grid_h, grid_w):
         val_loader = DataLoader(self.val_dataset, batch_size=1, shuffle=False)

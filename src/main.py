@@ -23,7 +23,7 @@ combined_checkpoint_path = None
 
 def train_sos_predictor():
     global sos_checkpoint_path
-    epochs = 2
+    epochs = 4
     solver = EikonalSolverMultiLayer(num_layers=3, speed_of_sound=1450, domain_size=0.128, grid_resolution=128)
     solver.to('cpu')
     trainer = PINNTrainer(model=TofToSosUNetModel(),
@@ -89,7 +89,9 @@ if __name__ == "__main__":
     log_message(' ')
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     log_message("[main.py] Starting PINN training pipeline...")
-    print('started')
+    #print('started')
+    log_message(' ')
+    log_message("[main.py] Implementing: train_sos_predictor")
     train_sos_predictor()
     #train_tof_predictor()
     #train_combined_model()
@@ -98,6 +100,6 @@ if __name__ == "__main__":
     res = et - st
     hours, minutes, seconds = convert(res)
     log_message(" ")
-    log_message('CPU Execution time: {} hours, {} Minutes, {} seconds'.format(int(hours), int(minutes), int(seconds)))
+    log_message('[main.py] CPU Execution time: {} hours, {} Minutes, {} seconds'.format(int(hours), int(minutes), int(seconds)))
 
 
