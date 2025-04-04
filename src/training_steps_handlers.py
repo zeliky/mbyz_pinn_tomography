@@ -105,9 +105,9 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
         self.y_range = kwargs.get('y_range', (32, 96))
         self.nx = kwargs.get('nx', 8)
         self.ny = kwargs.get('ny', 8)
-        self.mnc = kwargs.get('ny', 20)
+        self.mnc = kwargs.get('mnc', 20)
 
-        self.gd = GraphDataset(c_init=c_init,x_range=self.x_range,y_range=self.y_range, nx=self.nx, ny=self.ny)
+        self.gd = GraphDataset(c_init=c_init,x_range=self.x_range,y_range=self.y_range, nx=self.nx, ny=self.ny, mnc=self.mnc)
         self.estimator = estimator
 
 
@@ -142,6 +142,7 @@ class DualHeadGATTrainingStep(BaseTrainingStep):
         self.estimator.reset(self.device)
         for i, data in self.gd.get_graph(tof, selected_sources, self.device):
             T, c = self.estimator.estimate(data.x, data.edge_index, data.pos, transmitters_indices, receiver_indices)
+        print(c)
             #tof_list.append(T)
 
 

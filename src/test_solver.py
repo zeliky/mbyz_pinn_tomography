@@ -13,7 +13,7 @@ dataset = TofDataset(['train'])
 data_loader = DataLoader(dataset, batch_size=1, shuffle=True)
 num_samples = 4
 c_init = 0.15
-grid_res = 16
+grid_res = 8
 x_range = (32, 96)
 y_range = (32, 96)
 fmm_iterations = 20

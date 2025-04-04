@@ -12,8 +12,8 @@ class GraphDataset:
         self.epsilon = 1e-5
         self.x_range = kwargs.get('x_range', (32, 96))
         self.y_range = kwargs.get('y_range', (32, 96))
-        self.nx = kwargs.get('nx', self.x_range[1]-self.x_range[0]+1)
-        self.ny = kwargs.get('ny', self.y_range[1]-self.y_range[0]+1)
+        self.nx = kwargs.get('nx', 8)
+        self.ny = kwargs.get('ny', 8)
         self.mesh_node_connections = kwargs.get('mnc', 20)
         self.num_source_nodes = kwargs.get('num_source_nodes', 32)
         self.num_receiver_nodes = kwargs.get('num_receiver_nodes', 32)
@@ -30,6 +30,7 @@ class GraphDataset:
 
         rp = {i: receivers_positions[i] for i in range(len(receivers_positions))}
         mesh_to_receivers_edges = self._connect_sensors_to_mesh(rp, mesh_positions, group='R', k=self.nx)
+        #mesh_to_receivers_edges = [(0,0)]
         self.edges = mesh_to_receivers_edges
         self.positions = np.concatenate((sources_positions, receivers_positions, mesh_positions))
         self.mesh_positions = mesh_positions
@@ -71,10 +72,10 @@ class GraphDataset:
 
             # Set the entire SoS layer (column=1) to c_init
             x_init[:, 1] = self.c_init
-            x_init[:, 0] = 1# float('inf')
+            #x_init[:, 0] = 0 # float('inf')
             # print(f"init tof for source {source_node_idx} : {self.positions[source_node_idx]}")
-            #distances = np.linalg.norm(self.positions - self.positions[source_node_idx], axis=1) + self.epsilon
-            #x_init[:, 0] = torch.from_numpy(distances)
+            distances = np.linalg.norm(self.positions - self.positions[source_node_idx], axis=1) + self.epsilon
+            x_init[:, 0] = torch.from_numpy(distances) / self.c_init
             #x_init[:, 0] = self.epsilon
 
             for j in range(self.num_receiver_nodes):
@@ -83,17 +84,18 @@ class GraphDataset:
                 # This sets T = ToF(source i -> receiver j) on the j-th receiver node.
 
             # mark the source node with tof =0 (the rest are zeroes)
-            x_init[source_node_idx, 0] = 1000
+            x_init[source_node_idx, 0] = 0
 
             # The mesh nodes remain T=0; the sources remain T=0 as well.
 
             # Add the source edges to the graph
 
             sources_to_mesh_edges = self._connect_sensors_to_mesh(
-                {source_node_idx:self.positions[source_node_idx]}, self.mesh_positions, group='S' , k=2*self.nx)
-
+                {source_node_idx:self.positions[source_node_idx]}, self.mesh_positions, group='S' , k=self.nx)
+            #sources_to_mesh_edges = [(0,0)]
 
             mesh_edges = self._build_mesh_edges(source_node_idx)
+            #mesh_edges =  [(0,0)]
 
             edges = np.unique(np.concatenate((sources_to_mesh_edges, self.edges, mesh_edges)), axis=0)
             data = Data(
@@ -130,10 +132,9 @@ class GraphDataset:
             dists, indices = tree.query(pos, k=self.mesh_node_connections)
             # For each neighbor, create bidirectional edges
             for nbr in indices:
-                if i != nbr and distances[i] > distances[nbr]:
+                if i == nbr or distances[i] < distances[nbr]:
                     edges.append((i + self.num_sensor_nodes, nbr + self.num_sensor_nodes))
-                    edges.append((nbr + self.num_sensor_nodes, i + self.num_sensor_nodes ))
-
+                    #edges.append((nbr + self.num_sensor_nodes, i + self.num_sensor_nodes))
 
         edges = np.array(edges, dtype=np.int64)
         return edges
@@ -165,11 +166,13 @@ class GraphDataset:
             sensors_offset = self.num_source_nodes+self.num_receiver_nodes
             for idx in indices:
                 if group == 'S':
-                    sensor_to_mesh_edges.append((idx + sensors_offset, s_idx))  # mesh -> sensor
-                    sensor_to_mesh_edges.append((s_idx, idx + sensors_offset  ))  # mesh -> sensor
+                    #sensor_to_mesh_edges.append((idx + sensors_offset, s_idx))  # mesh -> sensor
+                    sensor_to_mesh_edges.append((s_idx , s_idx ))  # self loop
+                    sensor_to_mesh_edges.append((s_idx, idx + sensors_offset))  # sensor -> mesh
                 else:
-                    sensor_to_mesh_edges.append((s_idx+self.num_source_nodes, idx + sensors_offset))  # sensor -> mesh
-                    sensor_to_mesh_edges.append((idx + sensors_offset, s_idx+self.num_source_nodes ))  # sensor -> mesh
+                    #sensor_to_mesh_edges.append((s_idx+self.num_source_nodes, idx + sensors_offset))  # sensor -> mesh
+                    #sensor_to_mesh_edges.append((s_idx + self.num_source_nodes, s_idx + self.num_source_nodes)) # self loop
+                    sensor_to_mesh_edges.append((idx + sensors_offset, s_idx+self.num_source_nodes ))  # mesh => sensor
 
 
         edges = np.array(sensor_to_mesh_edges, dtype=np.int64)

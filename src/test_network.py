@@ -30,7 +30,7 @@ for batch in train_loader:
 
     print(f"positions: {gd.positions.shape}")
 
-    selected_sources = random.choices(range(32), k=4)
+    selected_sources = random.choices(range(32), k=1)
     for i, data in gd.get_graph(tof,selected_sources, device):
         print(f"features: {data.x.shape}")
 

@@ -31,10 +31,11 @@ gat_tof_sos_checkpoint_path = None
 def train_gat_tof_sos_predictor():
     global gat_tof_sos_checkpoint_path
     epochs = 30
-    grid_res = 16
-    estimator = SosEstimator(num_nodes=grid_res*grid_res+64, init_value=0.15, fmm_iterations=6)
+    grid_res = 8
+    mesh_node_connections = 20
+    estimator = SosEstimator(num_nodes=grid_res*grid_res+64, init_value=0.15, fmm_iterations=10)
     trainer = PINNTrainer(model=DualHeadGATModel(),
-                          training_step_handler=DualHeadGATTrainingStep(estimator, nx=grid_res, ny=grid_res, mnc=20),
+                          training_step_handler=DualHeadGATTrainingStep(estimator, nx=grid_res, ny=grid_res, mnc=mesh_node_connections),
                           batch_size=1,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),

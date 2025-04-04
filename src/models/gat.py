@@ -48,11 +48,13 @@ class FMMMessagePassing(MessagePassing):
         The suffix '_j' indicates we are dealing with the neighbor's data.
         """
         # Compute Euclidean distance between node i and j
+
+        speed_j = self.min_sos + (self.max_sos - self.min_sos) * torch.sigmoid(speed_j)
+
         dist_ij = (pos_j - pos_i).norm(dim=-1).float()  # shape [num_edges]
         #  “fast marching” style update:
         # T_i potential from neighbor j = T_j + distance / speed_j
-        update = tof_j + dist_ij / (speed_j + 1e-8)
-        return update
+        return tof_j + dist_ij / (speed_j + 1e-8)
 
     def update(self, aggr_out):
         """
@@ -148,16 +150,24 @@ class SosEstimator:
         T_in = x[:, 0]  # shape (num_nodes,)
         self.message_passing.init_tof_values(T_in)
         self.optimizer = optim.Adam(self.message_passing.parameters(), lr=self.lr)
+        self.optimizer.zero_grad()
         for _ in range(self.fmm_iterations):
-            self.optimizer.zero_grad()
+
             updated_T = self.message_passing(edge_index, pos)
+            self.message_passing.init_tof_values(updated_T)
             #print(f"pred: {updated_T}")
             #print(f"true: {T_in[receiver_indices]}")
-            loss = self.criterion(updated_T[receiver_indices], T_in[receiver_indices]) + torch.sum(updated_T[transmitters_indices])
-            #loss =  torch.abs(torch.sum(updated_T[transmitters_indices]))
-            #print(updated_T[transmitters_indices])
-            loss.backward()
+            loss = self.criterion(T_in[receiver_indices],updated_T[receiver_indices])
+            print(loss)
+            loss.backward(retain_graph=True)
             self.optimizer.step()
+
+        #print(updated_T)
+
+        #loss =  torch.abs(torch.sum(updated_T[transmitters_indices]))
+        #print(loss)
+        #print(updated_T[transmitters_indices])
+
 
         T = updated_T
         c = self.message_passing.sos_values
