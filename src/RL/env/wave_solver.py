@@ -1,12 +1,77 @@
 import torch
+import numpy as np
 from torch_geometric.data import Data
 from torch_geometric.nn import GATConv, MessagePassing
+from scipy.interpolate import griddata
+from py2mat.msfm2d import msfm2d
 class WaveSolver:
 
     def __init__(self, num_iterations=5):
         self.num_iterations = num_iterations
 
-    def simulate_T(self, data: Data, src_id):
+    def simulate_T(self, data, src_id):
+        """
+        Compute time-of-flight values for receiver and mesh nodes using msfm2d.
+
+        Parameters:
+        - data: PyG Data object containing:
+            - data.x[:, 0] => initial T values
+            - data.x[:, 1] => c (speed of sound)
+            - data.pos => positions (N, 2)
+        - src_id: Index of the source node
+
+        Returns:
+        - T: Tensor of time-of-flight values for all nodes
+        """
+        # Extract positions and speed of sound
+        positions = data.pos.cpu().numpy()
+        c = data.x[:, 1].cpu().numpy()  # Speed of sound
+
+        # Get source position
+        source_pos = positions[src_id]
+
+        # Create a grid for the speed function
+        x_min, y_min = positions.min(axis=0)
+        x_max, y_max = positions.max(axis=0)
+
+        # Create a fine grid for the speed function
+        grid_size = 100  # Adjust based on your needs
+        x_grid = np.linspace(x_min, x_max, grid_size)
+        y_grid = np.linspace(y_min, y_max, grid_size)
+        X, Y = np.meshgrid(x_grid, y_grid)
+
+        # Interpolate speed of sound onto the grid
+
+        F = griddata(positions, c, (X, Y), method='linear', fill_value=c.mean())
+
+        # Convert source position to grid coordinates
+        source_grid = np.array([
+            int((source_pos[0] - x_min) / (x_max - x_min) * (grid_size - 1)),
+            int((source_pos[1] - y_min) / (y_max - y_min) * (grid_size - 1))
+        ]).reshape(1, 2)
+
+        # Run msfm2d
+        T_grid = msfm2d(F, source_grid)
+
+        # Interpolate T values back to original positions
+        T = griddata(
+            (X.flatten(), Y.flatten()),
+            T_grid.flatten(),
+            positions,
+            method='linear',
+            fill_value=np.inf
+        )
+
+        # Convert back to tensor
+        T = torch.tensor(T, dtype=torch.float32, device=data.x.device)
+
+        # Set source T to 0
+        T[src_id] = 0.0
+
+        return T
+
+
+    def BAK_simulate_T(self, data: Data, src_id):
         """
         data: a PyG Data object from GraphDataset.get_graph(), containing:
             - data.x[:, 0] => initial T values

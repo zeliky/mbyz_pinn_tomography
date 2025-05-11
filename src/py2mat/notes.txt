@@ -1,0 +1,1 @@
+cd src/py2mat/c && gcc -c -fPIC common.c -o common.o && gcc -c -fPIC msfm2d.c -o msfm2d.o && gcc -shared -o libmsfm2d.so msfm2d.o common.o -lm
