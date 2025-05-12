@@ -59,10 +59,11 @@ class AcousticEnv:
         self.c_map[self.num_source_nodes + self.num_receiver_nodes :] = 1.2  # mesh reset
         return self._build_observation()
 
-    def test_cmap(self, mesh_cmap, src_id):
-        mesh_start = self.num_source_nodes + self.num_receiver_nodes
+    def test_cmap(self, c_map, src_id):
+        #mesh_start = self.num_source_nodes + self.num_receiver_nodes
 
-        self.c_map[mesh_start: mesh_start + self.num_mesh_nodes] = torch.from_numpy(mesh_cmap)
+        #self.c_map[mesh_start: mesh_start + self.num_mesh_nodes] = torch.from_numpy(mesh_cmap)
+        self.c_map = c_map
         return self._run_wave_simulation(src_id)
 
     # -------------------------------------------------------------
@@ -110,6 +111,7 @@ class AcousticEnv:
         print(T_pred[recv_start:recv_end])
         print(f"real values:")
         print(self.tof_matrix[src_id])
+
         #exit()
         mae = (T_pred[recv_start:recv_end] - self.tof_matrix[src_id]).abs().mean()
         reward = -mae.item()

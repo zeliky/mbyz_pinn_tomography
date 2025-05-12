@@ -174,6 +174,7 @@ class GraphDataset:
 
         tree = cKDTree(mesh_positions)
         for i in range(self.num_mesh_nodes):
+
             pos_i = mesh_positions[i]
             dists, nbr_indices = tree.query(pos_i, k=self.mesh_node_k)
             i_global = i + mesh_start

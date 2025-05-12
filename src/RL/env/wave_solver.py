@@ -4,6 +4,7 @@ from torch_geometric.data import Data
 from torch_geometric.nn import GATConv, MessagePassing
 from scipy.interpolate import griddata
 from py2mat.msfm2d import msfm2d
+from logger import visualize_matdata
 class WaveSolver:
 
     def __init__(self, num_iterations=5):
@@ -17,56 +18,48 @@ class WaveSolver:
         - data: PyG Data object containing:
             - data.x[:, 0] => initial T values
             - data.x[:, 1] => c (speed of sound)
-            - data.pos => positions (N, 2)
+            - data.pos => positions (N, 2) in real coordinates (128x128 domain)
         - src_id: Index of the source node
 
         Returns:
         - T: Tensor of time-of-flight values for all nodes
         """
         # Extract positions and speed of sound
-        positions = data.pos.cpu().numpy()
+        positions = data.pos.cpu().numpy()   
         c = data.x[:, 1].cpu().numpy()  # Speed of sound
 
         # Get source position
         source_pos = positions[src_id]
 
         # Create a grid for the speed function
-        x_min, y_min = positions.min(axis=0)
-        x_max, y_max = positions.max(axis=0)
+        # Use the actual domain size (128x128)
+        x_min, y_min = 0, 0
+        x_max, y_max = 127, 127
 
         # Create a fine grid for the speed function
-        grid_size = 100  # Adjust based on your needs
+        grid_size = 128  # Match the domain size for better accuracy
         x_grid = np.linspace(x_min, x_max, grid_size)
         y_grid = np.linspace(y_min, y_max, grid_size)
         X, Y = np.meshgrid(x_grid, y_grid)
-
-        # Interpolate speed of sound onto the grid
-
-        F = griddata(positions, c, (X, Y), method='linear', fill_value=c.mean())
+        F = griddata(positions, c, (X, Y), method='linear', fill_value=1.2)
+        #visualize_matdata(F, 'mesh cmap')
 
         # Convert source position to grid coordinates
-        source_grid = np.array([
-            int((source_pos[0] - x_min) / (x_max - x_min) * (grid_size - 1)),
-            int((source_pos[1] - y_min) / (y_max - y_min) * (grid_size - 1))
-        ]).reshape(1, 2)
+        source_grid = np.array([int(source_pos[0]),int(source_pos[1])]).reshape(1, 2)
 
         # Run msfm2d
         T_grid = msfm2d(F, source_grid)
+        visualize_matdata(T_grid, 'T map')
 
-        # Interpolate T values back to original positions
-        T = griddata(
-            (X.flatten(), Y.flatten()),
-            T_grid.flatten(),
-            positions,
-            method='linear',
-            fill_value=np.inf
-        )
+        # convert back to the graph nodes structure (each node will get the T value at its position)
+        T = []
+        for x, y in positions:
+            x_idx = int(x)
+            y_idx = int(y)
+            T.append(T_grid[y_idx, x_idx])
 
         # Convert back to tensor
         T = torch.tensor(T, dtype=torch.float32, device=data.x.device)
-
-        # Set source T to 0
-        T[src_id] = 0.0
 
         return T
 
