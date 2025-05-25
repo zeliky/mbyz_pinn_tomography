@@ -10,7 +10,8 @@ from models.pinn_linear import TOFtoSOSPINNLinerModel
 from models.pinn_unet import MultiSourceTOFModel
 from models.pinn_combined import CombinedSosTofModel
 from models.gat import DualHeadGATModel, SosEstimator
-from training_steps_handlers import (TofToSosUNetTrainingStep, TofPredictorTrainingStep, CombinedSosTofTrainingStep,
+from RL.policy.gnn_policy import GNNPolicy
+from training_steps_handlers import (RLAgetTrainingStep,TofToSosUNetTrainingStep, TofPredictorTrainingStep, CombinedSosTofTrainingStep,
                                      TOFtoSOSPINNLinerTrainingStep, DualHeadGATTrainingStep)
 import os
 import time
@@ -27,7 +28,28 @@ combined_checkpoint_path = None
 #gat_tof_sos_checkpoint_path = 'bc
 # _ready.pth'
 gat_tof_sos_checkpoint_path = None
+rl_gat_tof_sos_checkpoint_path = None
 
+
+def train_gat_rl_agent_gat_policy():
+    global rl_gat_tof_sos_checkpoint_path
+    epochs = 30
+    trainer = PINNTrainer(model=GNNPolicy(num_sensor_nodes=app_settings.sources_amount + app_settings.receivers_amount),
+                          training_step_handler=RLAgetTrainingStep(grid_res=2,mesh_node_k=9 ),
+                          batch_size=1,
+                          train_dataset=TofDataset(['train']),
+                          val_dataset=TofDataset(['validation']),
+                          epochs=epochs,
+                          lr=1e-4
+                          )
+    if rl_gat_tof_sos_checkpoint_path is not None:
+        trainer.load_checkpoint(rl_gat_tof_sos_checkpoint_path)
+    trainer.train_model()
+    log_message(' ')
+
+    trainer.visualize_training_and_validation()
+
+    log_message("[main.py] Training pipeline complete.")
 def train_gat_tof_sos_predictor():
     global gat_tof_sos_checkpoint_path
     epochs = 30
@@ -144,7 +166,8 @@ if __name__ == "__main__":
     #train_tof_predictor()
     #train_combined_model()
     #train_multitof_to_sos_predictor()
-    train_gat_tof_sos_predictor()
+    #train_gat_tof_sos_predictor()
+    train_gat_rl_agent_gat_policy()
     # Measure time
     et = time.process_time()
     res = et - st

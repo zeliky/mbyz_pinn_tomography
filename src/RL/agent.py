@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.distributions import Normal
 from typing import List, Tuple
 
@@ -149,7 +150,7 @@ class RLAgent:
 
     def train(self, total_episodes: int, max_steps: int = 512):
         for ep in range(total_episodes):
-            obs = self.env.reset()
+            obs = self.env.reset().to(self.device)
             episode_reward = 0.0
             for step in range(max_steps):
                 action = self.select_action(obs)
@@ -159,7 +160,7 @@ class RLAgent:
 
                 if done or step == max_steps - 1:
                     # compute update & break
-                    self.update_policy(next_obs)
+                    self.update_policy(next_obs.to(self.device))
                     print(f"Episode {ep} — reward {episode_reward:.3f}")
                     break
-                obs = next_obs
+                obs = next_obs.to(self.device)

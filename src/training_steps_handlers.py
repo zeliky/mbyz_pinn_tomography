@@ -3,6 +3,9 @@ import torch
 import numpy as np
 from physics import Solver, eikonal_loss_multi, eikonal_loss, initial_loss, boundary_loss,_to_mps
 from graph.network import GraphDataset
+from RL.env.acoustic_env import AcousticEnv
+from RL.agent import RLAgent
+from RL.policy.gnn_policy import GNNPolicy
 from logger import log_message, log_image
 from settings import  app_settings
 import random
@@ -96,6 +99,46 @@ class MultiRangeWeightedMSELoss(nn.Module):
         return weighted_mse.mean()
 
 
+class RLAgetTrainingStep(BaseTrainingStep):
+    def __init__(self,  **kwargs):
+        super().__init__()
+        self.grid_res = kwargs.get('grid_res',2)
+        self.mesh_node_k = kwargs.get('mesh_node_k',9)
+        self.c_init =kwargs.get('c_init',1.2)
+        self.gd = GraphDataset(c_init=self.c_init , x_range=(32,96),
+                                     y_range=(32,96), nx=self.grid_res, ny=self.grid_res,
+                                     mesh_node_k=self.mesh_node_k)
+
+        self.env = None
+
+    def perform_step(self, batch):
+        sources_positions = batch['x_s'].squeeze()
+        receivers_positions = batch['x_r'].squeeze()
+        tof = batch['raw_tof'].squeeze().float().to(self.device)
+        num_sources = app_settings.sources_amount
+        sources = random.sample(range(num_sources), k=num_sources)
+        if not self.gd.initialized:
+            self.gd.build(sources_positions, receivers_positions)
+
+        config = {
+            'c_init': self.c_init,
+            'full_mesh_resolution' :(app_settings.anatomy_height, app_settings.anatomy_width),
+            'sources_positions': sources_positions,
+            'receivers_positions':receivers_positions,
+            'tof_matrix': tof,
+            'selected_sources': sources,
+        }
+        self.env = AcousticEnv(config,  self.gd )
+
+        agent = RLAgent(self.model, self.env, device=self.device)
+        agent.train(total_episodes=5, max_steps=10)
+
+    def eval_model(self, batch):
+        sources_positions = batch['x_s'].squeeze()
+        receivers_positions = batch['x_r'].squeeze()
+        tof = batch['raw_tof'].squeeze().float().to(self.device)
+        if not self.gd.initialized:
+            self.gd.build(sources_positions, receivers_positions)
 
 class DualHeadGATTrainingStep(BaseTrainingStep):
     def __init__(self,estimator, ** kwargs):

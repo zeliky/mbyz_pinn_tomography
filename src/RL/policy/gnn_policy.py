@@ -17,7 +17,7 @@ class GNNPolicy(nn.Module):
     """
 
     # Discrete candidate SoS values (cm / µs or your chosen units)
-    C_BINS = torch.tensor([0.1, 0.5, 1.2, 1.5, 2.5])  # shape (5,)
+    C_BINS = torch.tensor([1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4]) # shape (5,)
 
     def __init__(
         self,
@@ -28,6 +28,9 @@ class GNNPolicy(nn.Module):
     ):
         super().__init__()
         self.num_sensor_nodes = num_sensor_nodes
+
+        # Input normalization
+        self.input_norm = nn.LayerNorm(input_dim)
 
         # Two‑layer GAT encoder
         self.gat1 = GATConv(input_dim, hidden_dim, heads=num_heads, concat=True)
@@ -45,9 +48,14 @@ class GNNPolicy(nn.Module):
         """Return (action_distribution, value_estimate)."""
         x, edge_index = data.x, data.edge_index
 
-        # GAT layers
+        # Normalize input features
+        x = self.input_norm(x)
+
+        # GAT layers with gradient clipping
         h = F.relu(self.gat1(x, edge_index))
+        h = torch.clamp(h, min=-10, max=10)  # Prevent extreme values
         h = F.relu(self.gat2(h, edge_index))
+        h = torch.clamp(h, min=-10, max=10)  # Prevent extreme values
 
         # ----------------- Value -----------------
         batch = torch.zeros(h.size(0), dtype=torch.long, device=h.device)  # single graph
@@ -56,6 +64,9 @@ class GNNPolicy(nn.Module):
 
         # ----------------- Policy ----------------
         logits = self.policy_head(h)  # (N, 5)
+        
+        # Ensure logits are finite
+        logits = torch.nan_to_num(logits, nan=0.0, posinf=10.0, neginf=-10.0)
 
         # Mask out sensor nodes (sources + receivers) so the agent only changes mesh nodes
         if self.num_sensor_nodes > 0:

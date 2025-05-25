@@ -17,18 +17,20 @@ class AcousticEnv:
     list of PyG Data objects (one per selected source).
     """
 
-    C_BINS = torch.tensor([0.1, 0.5, 1.2, 1.5, 2.5])  # candidate SoS values
+    C_BINS = torch.tensor([1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4])  # candidate SoS values
+
 
     # -------------------------------------------------------------
     # Construction / Reset
     # -------------------------------------------------------------
     def __init__(self, config, graph_dataset):
         self.device = config.get("device", "cpu")
+        self.c_init = config['c_init']
 
         # positions & ground‑truth ToF
         self.sources_positions = np.asarray(config["sources_positions"], dtype=np.float32)
         self.receivers_positions = np.asarray(config["receivers_positions"], dtype=np.float32)
-        self.tof_matrix = torch.tensor(config["tof_matrix"], dtype=torch.float32, device=self.device)
+        self.tof_matrix = torch.tensor(config["tof_matrix"], dtype=torch.float32, device=self.device).clone().detach()
 
         # selected sources per episode (can be 1..S)
         self.selected_sources = list(config.get("selected_sources", range(len(self.sources_positions))))
@@ -44,10 +46,12 @@ class AcousticEnv:
         self.total_nodes = self.num_source_nodes + self.num_receiver_nodes + self.num_mesh_nodes
 
 
+        self.full_mesh = torch.full(config['full_mesh_resolution'], self.c_init, device=self.device)
+        
         # speed map – initialise with middle bin (1.2)
-        self.c_map = torch.full((self.total_nodes,), 1.2, device=self.device)
+        self.c_map = torch.full((self.total_nodes,), self.c_init, device=self.device)
         # keep sensor nodes fixed (optional – could also let them vary)
-        self.c_map[: self.num_source_nodes + self.num_receiver_nodes] = 1.2
+        self.c_map[: self.num_source_nodes + self.num_receiver_nodes] = self.c_init
 
         # solver
         self.solver = WaveSolver(num_iterations=20)
@@ -56,7 +60,7 @@ class AcousticEnv:
     def reset(self):
         """Reset environment state & return initial observation (PyG list)."""
         self.curr_source_idx = 0
-        self.c_map[self.num_source_nodes + self.num_receiver_nodes :] = 1.2  # mesh reset
+        self.c_map[self.num_source_nodes + self.num_receiver_nodes :] = self.c_init  # mesh reset
         return self._build_observation()
 
     def test_cmap(self, c_map, src_id):
@@ -67,6 +71,20 @@ class AcousticEnv:
         return self._run_wave_simulation(src_id)
 
     # -------------------------------------------------------------
+    def _update_full_mesh(self, mesh_actions):
+        """Update the full 128x128 mesh with agent actions based on mesh node positions."""
+        mesh_start = self.num_source_nodes + self.num_receiver_nodes
+        mesh_positions = self.graph_dataset.positions[mesh_start:]
+        
+        # Reset mesh to base value
+        self.full_mesh.fill_(self.c_init)
+        
+        # Update mesh with agent actions
+        for i, (x, y) in enumerate(mesh_positions):
+            x_idx = int(x)
+            y_idx = int(y)
+            self.full_mesh[y_idx, x_idx] = AcousticEnv.C_BINS[mesh_actions[i]]
+
     def step(self, action):
         """
         action – LongTensor (N,) with discrete indices 0..4 produced by the agent.
@@ -75,12 +93,17 @@ class AcousticEnv:
         action = torch.as_tensor(action, dtype=torch.long, device=self.device)
         mesh_start = self.num_source_nodes + self.num_receiver_nodes
         mesh_actions = action[mesh_start : mesh_start + self.num_mesh_nodes]
-        # translate to real c values & update map
+        
+        # Update full mesh with agent actions
+        self._update_full_mesh(mesh_actions)
+        
+        # Update c_map for the graph nodes
         self.c_map[mesh_start:] = AcousticEnv.C_BINS[mesh_actions]
+        
         src_id = self.selected_sources[self.curr_source_idx]
         return self._run_wave_simulation(src_id)
 
-    def _run_wave_simulation(self,src_id):
+    def _run_wave_simulation(self, src_id):
         # -----------------------------------------------------
         # Wave simulation for the *current* source
         # -----------------------------------------------------
@@ -107,7 +130,7 @@ class AcousticEnv:
 
         print(f"source ID: {src_id}")
         #print(T_pred[0:recv_start])
-        print(f"message passing values:")
+        print(f"simulated TOF values:")
         print(T_pred[recv_start:recv_end])
         print(f"real values:")
         print(self.tof_matrix[src_id])
@@ -120,7 +143,7 @@ class AcousticEnv:
         # -----------------------------------------------------
         self.curr_source_idx += 1
         done = self.curr_source_idx >= len(self.selected_sources)
-        observation = [data]  # list so interface stays consistent (could be multi‑source)
+        observation = data
         info = {"mae": mae.item(), "source": src_id}
         # if episode finished, you might shuffle sources or compute extra stats
         return observation, reward, done, info
@@ -136,7 +159,7 @@ class AcousticEnv:
         )
         # insert current c map
         data.x[:, 1] = self.c_map
-        return [data]
+        return data
 
     # -------------------------------------------------------------
     def render(self, mode="human"):

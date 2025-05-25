@@ -41,8 +41,8 @@ class WaveSolver:
         x_grid = np.linspace(x_min, x_max, grid_size)
         y_grid = np.linspace(y_min, y_max, grid_size)
         X, Y = np.meshgrid(x_grid, y_grid)
-        F = griddata(positions, c, (X, Y), method='linear', fill_value=1.2)
-        #visualize_matdata(F, 'mesh cmap')
+        F = griddata(positions, c, (X, Y), method='nearest', fill_value=1.2)
+        visualize_matdata(F, 'mesh cmap')
 
         # Convert source position to grid coordinates
         source_grid = np.array([int(source_pos[0]),int(source_pos[1])]).reshape(1, 2)
