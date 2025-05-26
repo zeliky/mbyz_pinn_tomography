@@ -12,7 +12,7 @@ class WaveSolver:
 
     def simulate_T(self, data, src_id):
         """
-        Compute time-of-flight values for receiver and mesh nodes using msfm2d.
+        Compute time-of-flight values using msfm2d, but only for receiver positions.
 
         Parameters:
         - data: PyG Data object containing:
@@ -22,47 +22,37 @@ class WaveSolver:
         - src_id: Index of the source node
 
         Returns:
-        - T: Tensor of time-of-flight values for all nodes
+        - T_receivers: Tensor of time-of-flight values for receiver nodes
         """
-        # Extract positions and speed of sound
-        positions = data.pos.cpu().numpy()   
-        c = data.x[:, 1].cpu().numpy()  # Speed of sound
-
         # Get source position
+        positions = data.pos.cpu().numpy()
         source_pos = positions[src_id]
 
-        # Create a grid for the speed function
-        # Use the actual domain size (128x128)
-        x_min, y_min = 0, 0
-        x_max, y_max = 127, 127
+        # Convert source position to grid coordinates
+        source_grid = np.array([int(source_pos[0]), int(source_pos[1])]).reshape(1, 2)
 
-        # Create a fine grid for the speed function
-        grid_size = 128  # Match the domain size for better accuracy
-        x_grid = np.linspace(x_min, x_max, grid_size)
-        y_grid = np.linspace(y_min, y_max, grid_size)
-        X, Y = np.meshgrid(x_grid, y_grid)
-        F = griddata(positions, c, (X, Y), method='nearest', fill_value=1.2)
+        # Get the full mesh from the environment
+        F = data.full_mesh.cpu().numpy()
         visualize_matdata(F, 'mesh cmap')
 
-        # Convert source position to grid coordinates
-        source_grid = np.array([int(source_pos[0]),int(source_pos[1])]).reshape(1, 2)
-
-        # Run msfm2d
+        # Run msfm2d on the full mesh
         T_grid = msfm2d(F, source_grid)
         visualize_matdata(T_grid, 'T map')
 
-        # convert back to the graph nodes structure (each node will get the T value at its position)
-        T = []
-        for x, y in positions:
+        # Extract T values only for receiver positions
+        receiver_start = data.num_source_nodes
+        receiver_end = receiver_start + data.num_receiver_nodes
+        receiver_positions = positions[receiver_start:receiver_end]
+        
+        T_receivers = []
+        for x, y in receiver_positions:
             x_idx = int(x)
             y_idx = int(y)
-            T.append(T_grid[y_idx, x_idx])
+            T_receivers.append(T_grid[y_idx, x_idx])
 
-        # Convert back to tensor
-        T = torch.tensor(T, dtype=torch.float32, device=data.x.device)
-
-        return T
-
+        # Convert to tensor
+        T_receivers = torch.tensor(T_receivers, dtype=torch.float32, device=data.x.device)
+        return T_receivers
 
     def BAK_simulate_T(self, data: Data, src_id):
         """

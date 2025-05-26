@@ -7,7 +7,6 @@ import torch.nn.functional as F
 
 class GraphDataset:
     def __init__(self, **kwargs):
-
         self.c_init = kwargs.get('c_init', 0.12)
         self.t_init = kwargs.get('t_init', 0)
         self.epsilon = 1e-5
@@ -17,8 +16,8 @@ class GraphDataset:
         self.ny = kwargs.get('ny', 8)
 
         # Connectivity parameters
-        self.mesh_node_k = kwargs.get('mesh_node_k', 20)  # was mesh_node_connections
-        self.sensor_k = kwargs.get('sensor_k', 8)  # separate from nx to avoid confusion
+        self.mesh_node_k = kwargs.get('mesh_node_k', 20)
+        self.sensor_k = kwargs.get('sensor_k', 8)
         self.bidirectional = kwargs.get('bidirectional', True)  # to toggle directed vs undirected
 
         # S/R counts
@@ -29,7 +28,6 @@ class GraphDataset:
 
         # Graph storage
         self.global_edges = None  # store adjacency for all nodes
-        self.global_edge_attrs = None  # store PDE-based edge attributes (e.g., distance)
         self.positions = None
         self.mesh_positions = None
         self.initialized = False
@@ -48,59 +46,51 @@ class GraphDataset:
 
         # 2) Build adjacency
         #    a) mesh <-> mesh
-        mesh_edges, mesh_edge_attrs = self._build_mesh_edges()
+        mesh_edges = self._build_mesh_edges()
         #    b) sources -> mesh
-        src_edges, src_edge_attrs = self._connect_sensors_to_mesh(
+        src_edges = self._connect_sensors_to_mesh(
             sensor_indices=range(self.num_source_nodes),
             sensor_positions=sources_positions,sensor_type='S'
         )
         #    c) receivers -> mesh
         rcv_offsets = range(self.num_source_nodes, self.num_source_nodes + self.num_receiver_nodes)
-        rcv_edges, rcv_edge_attrs = self._connect_sensors_to_mesh(
+        rcv_edges = self._connect_sensors_to_mesh(
             sensor_indices=rcv_offsets,
             sensor_positions=receivers_positions, sensor_type='R'
         )
 
         # Combine all edges
         edges_all = np.concatenate((mesh_edges, src_edges, rcv_edges), axis=0)
-        edge_attrs_all = np.concatenate((mesh_edge_attrs, src_edge_attrs, rcv_edge_attrs), axis=0)
   
         # Remove duplicates & unify
-        structured = np.zeros((edges_all.shape[0], 3))  # (i, j, distance)
+        structured = np.zeros((edges_all.shape[0], 2))  # (i, j)
         structured[:, 0:2] = edges_all
-        structured[:, 2] = edge_attrs_all[:, 0]
 
         unique_set = set()
         unique_list = []
         for row in structured:
-            i, j, dist = row
+            i, j = row
             i, j = int(i), int(j)
-            dist_rounded = round(dist, 6)
-            if (i, j, dist_rounded) not in unique_set:
-                unique_set.add((i, j, dist_rounded))
-                unique_list.append([i, j, dist_rounded])
+
+            if (i, j) not in unique_set:
+                unique_set.add((i, j))
+                unique_list.append([i, j])
 
         unique_arr = np.array(unique_list)
 
         #  add reverse unless they exist
-        total_sensor_nodes = self.num_source_nodes +self.num_receiver_nodes
+        total_sensor_nodes = self.num_source_nodes + self.num_receiver_nodes
         if self.bidirectional:
             reverse_list = []
             for e in unique_arr:
-                i, j, dist = e
-                if i>total_sensor_nodes and j> total_sensor_nodes and (j, i, dist) not in unique_set:
-                    reverse_list.append([j, i, dist])
+                i, j = e
+                if i>total_sensor_nodes and j> total_sensor_nodes and (j, i) not in unique_set:
+                    reverse_list.append([j, i])
             if len(reverse_list) > 0:
                 reverse_arr = np.array(reverse_list)
                 unique_arr = np.concatenate((unique_arr, reverse_arr), axis=0)
 
-        # separate edges and attributes
-        edges = unique_arr[:, 0:2].astype(np.int64)
-        edge_attrs = unique_arr[:, 2].reshape(-1, 1).astype(np.float32)
-
-        self.global_edges = edges  # shape => (E, 2)
-        self.global_edge_attrs = edge_attrs  # shape => (E, 1)
-
+        self.global_edges = unique_arr.astype(np.int64)  # shape => (E, 2)
 
     def get_graph(self, tof_matrix, selected_sources, device):
         """
@@ -114,13 +104,8 @@ class GraphDataset:
             A tuple (i, x_init) for each source i:
              - i is the source index (0 <= i < self.num_source_nodes).
              - x_init is a tensor of shape (num_total_nodes, 2), where:
-                 x_init[:, 0] = T layer (time-of-flight)
-                 x_init[:, 1] = c layer (speed of sound)
-               with the following layout:
-                 - x_init[0..S-1, 0]   = inf for all sources except selected one (T=0)
-                 - x_init[S..S+R-1, 0] = inf for all receivers (will be computed by solver)
-                 - x_init[S+R..end, 0] = inf for mesh nodes
-                 - x_init[:, 1]        = c_init for all nodes
+                 x_init[:, 0] = ToF values (0 for source, ToF[i,j] for receivers, inf for mesh)
+                 x_init[:, 1] = distance from source i
         """
         if not self.initialized:
             raise ValueError("GraphDataset not built yet!")
@@ -132,20 +117,27 @@ class GraphDataset:
 
         pos_tensor = torch.tensor(self.positions, dtype=torch.float32, device=device)
         edge_index = torch.tensor(self.global_edges, dtype=torch.long, device=device).T  # (2, E)
-        edge_attr = torch.tensor(self.global_edge_attrs, dtype=torch.float32, device=device)
 
         for i in selected_sources:
             # node features => (N, 2)
             x_init = torch.full((total_nodes, 2), float('inf'), dtype=torch.float32, device=device)
-            x_init[:, 1] = self.c_init  # fill c
 
-            # Set T=0 only for the current source, all others remain inf
-            x_init[i, 0] = 0.0
+            # Layer 0: ToF values
+            x_init[i, 0] = 0.0  # ToF is 0 at source
+            # Set ToF values for receivers (from tof_matrix)
+            receiver_start = self.num_source_nodes
+            receiver_end = receiver_start + self.num_receiver_nodes
+            x_init[receiver_start:receiver_end, 0] = tof_matrix[i]  # Set ToF values for receivers
+            # Mesh nodes remain inf
+
+            # Layer 1: Distances from source
+            source_pos = self.positions[i]
+            distances = np.array([np.linalg.norm(pos - source_pos) for pos in self.positions])
+            x_init[:, 1] = torch.tensor(distances, dtype=torch.float32, device=device)
 
             data = Data(
                 x=x_init,
                 edge_index=edge_index,
-                edge_attr=edge_attr,
                 pos=pos_tensor
             )
  
@@ -165,56 +157,43 @@ class GraphDataset:
                 coords.append((x_values[i], y_values[j]))
         return np.array(coords, dtype=np.float32)
 
-
     def _build_mesh_edges(self):
         edges = []
-        edge_attrs = []
         mesh_start = self.num_sensor_nodes
         mesh_positions = self.positions[mesh_start:]
 
         tree = cKDTree(mesh_positions)
         for i in range(self.num_mesh_nodes):
-
             pos_i = mesh_positions[i]
-            dists, nbr_indices = tree.query(pos_i, k=self.mesh_node_k)
+            _, nbr_indices = tree.query(pos_i, k=self.mesh_node_k)
             i_global = i + mesh_start
-            for dist, nbr in zip(dists, nbr_indices):
+            for nbr in nbr_indices:
                 if i == nbr:
                     continue
                 j_global = nbr + mesh_start
                 edges.append((i_global, j_global))
-                edge_attrs.append([dist])
 
-        return np.array(edges, dtype=np.int64), np.array(edge_attrs, dtype=np.float32)
-
+        return np.array(edges, dtype=np.int64)
 
     def _connect_sensors_to_mesh(self, sensor_indices, sensor_positions, sensor_type):
         edges = []
-        edge_attrs = []
-
         mesh_start = self.num_sensor_nodes
         mesh_positions = self.positions[mesh_start:]
         tree = cKDTree(mesh_positions)
 
         for local_idx, s_idx_global in enumerate(sensor_indices):
             s_pos = sensor_positions[local_idx]
-            dists, nbrs = tree.query(s_pos, k=self.sensor_k)
+            _, nbrs = tree.query(s_pos, k=self.sensor_k)
             if self.sensor_k == 1:
-                dists = [dists]
                 nbrs = [nbrs]
 
-            for dist, nbr in zip(dists, nbrs):
+            for nbr in nbrs:
                 j_global = nbr + mesh_start
                 if s_idx_global == j_global:
                     continue
 
-                # For sources: source -> mesh (wave propagates from source to mesh)
-                # For receivers: receiver <- mesh (wave propagates from mesh to receiver)
-                if sensor_type == 'S':
-                    edges.append((s_idx_global, j_global))  # source -> mesh
-                else:  # sensor_type == 'R'
-                    edges.append((j_global, s_idx_global))  # mesh -> receiver
-                edge_attrs.append([dist])
+                edges.append((s_idx_global, j_global))  # out
+                edges.append((j_global, s_idx_global))  # in
 
-        return np.array(edges, dtype=np.int64), np.array(edge_attrs, dtype=np.float32)
+        return np.array(edges, dtype=np.int64)
 

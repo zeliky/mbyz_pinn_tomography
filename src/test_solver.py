@@ -7,13 +7,14 @@ from models.gat import DualHeadGATModel, SosEstimator
 from dataset import TofDataset
 from logger import log_message, log_image
 from RL.env.acoustic_env import  AcousticEnv
+from settings import app_settings
 import random
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 dataset = TofDataset(['train'])
 data_loader = DataLoader(dataset, batch_size=1, shuffle=True)
 num_samples = 4
-c_init = 1.2
+c_init = 0.8
 grid_res = 1
 x_range = (0, 127)
 y_range = (0, 127)
@@ -46,16 +47,17 @@ def get_cmap(positions, cmap):
 for batch in val_loader:
     sos = batch['sos'].squeeze()
     config = {
+        'c_init': c_init,
         'sources_positions': batch['x_s'].squeeze().float(),
         'receivers_positions' : batch['x_r'].squeeze().float(),
         'tof_matrix' : batch['raw_tof'].squeeze().float(),
-        'selected_sources': [1,8,16,24]
+        'selected_sources': [1,8,16,24],
+        'full_mesh_resolution':(app_settings.anatomy_height, app_settings.anatomy_width),
     }
     gd = GraphDataset(c_init=c_init, x_range=x_range, y_range=y_range, nx=grid_res, ny=grid_res, mesh_node_k=mesh_node_k)
     env = AcousticEnv(config=config,graph_dataset=gd)
     env.reset()
     cmap = get_cmap(gd.positions, sos)
-
     c_map = torch.tensor(cmap, dtype=torch.float32, device=device)
     for src_id in config['selected_sources']:
         observation, reward, done, info = env.test_cmap(c_map, src_id)

@@ -35,7 +35,7 @@ def train_gat_rl_agent_gat_policy():
     global rl_gat_tof_sos_checkpoint_path
     epochs = 30
     trainer = PINNTrainer(model=GNNPolicy(num_sensor_nodes=app_settings.sources_amount + app_settings.receivers_amount),
-                          training_step_handler=RLAgetTrainingStep(grid_res=2,mesh_node_k=9 ),
+                          training_step_handler=RLAgetTrainingStep(),
                           batch_size=1,
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),

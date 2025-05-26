@@ -102,11 +102,12 @@ class MultiRangeWeightedMSELoss(nn.Module):
 class RLAgetTrainingStep(BaseTrainingStep):
     def __init__(self,  **kwargs):
         super().__init__()
-        self.grid_res = kwargs.get('grid_res',2)
-        self.mesh_node_k = kwargs.get('mesh_node_k',9)
-        self.c_init =kwargs.get('c_init',1.2)
-        self.gd = GraphDataset(c_init=self.c_init , x_range=(32,96),
-                                     y_range=(32,96), nx=self.grid_res, ny=self.grid_res,
+        self.grid_res = kwargs.get('grid_res',1)
+        self.mesh_node_k = kwargs.get('mesh_node_k',12)
+        self.sensor_k = kwargs.get('sensor_k', 20)
+        self.c_init = kwargs.get('c_init',0.8)
+        self.gd = GraphDataset(c_init=self.c_init , x_range=(10, 120),
+                                     y_range=(10, 120), nx=self.grid_res, ny=self.grid_res,
                                      mesh_node_k=self.mesh_node_k)
 
         self.env = None

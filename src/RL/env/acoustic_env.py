@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from torch_geometric.data import Data
-
+from logger import visualize_matdata
 from .wave_solver import WaveSolver   # assumes the WaveSolver text‑doc is saved as wave_solver.py on disk
 
 
@@ -17,7 +17,7 @@ class AcousticEnv:
     list of PyG Data objects (one per selected source).
     """
 
-    C_BINS = torch.tensor([1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4])  # candidate SoS values
+    C_BINS = torch.tensor([0.1, 0.8, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4])  # candidate SoS values
 
 
     # -------------------------------------------------------------
@@ -59,8 +59,8 @@ class AcousticEnv:
     # -------------------------------------------------------------
     def reset(self):
         """Reset environment state & return initial observation (PyG list)."""
-        self.curr_source_idx = 0
         self.c_map[self.num_source_nodes + self.num_receiver_nodes :] = self.c_init  # mesh reset
+        self.full_mesh = torch.full(self.full_mesh.shape, self.c_init, device=self.device)
         return self._build_observation()
 
     def test_cmap(self, c_map, src_id):
@@ -87,7 +87,7 @@ class AcousticEnv:
 
     def step(self, action):
         """
-        action – LongTensor (N,) with discrete indices 0..4 produced by the agent.
+        action – LongTensor (N,) with discrete indices produced by the agent.
                  Only mesh nodes (last *num_mesh_nodes*) are applied.
         """
         action = torch.as_tensor(action, dtype=torch.long, device=self.device)
@@ -96,12 +96,33 @@ class AcousticEnv:
         
         # Update full mesh with agent actions
         self._update_full_mesh(mesh_actions)
-        
         # Update c_map for the graph nodes
         self.c_map[mesh_start:] = AcousticEnv.C_BINS[mesh_actions]
+
+        # Run wave simulation for all selected sources
+        total_mae = 0.0
+        all_observations = []
+        all_infos = []
+
+        for src_id in self.selected_sources:
+            observation, reward, _, info = self._run_wave_simulation(src_id)
+            total_mae += info["mae"]
+            all_observations.append(observation)
+            all_infos.append(info)
+
+        # Compute average reward across all sources
+        avg_reward = -total_mae / len(self.selected_sources)
         
-        src_id = self.selected_sources[self.curr_source_idx]
-        return self._run_wave_simulation(src_id)
+        # Return the last observation (we could also return all observations if needed)
+        observation = all_observations[-1]
+        done = True  # Always done after processing all sources
+        info = {
+            "mae": total_mae / len(self.selected_sources),
+            "sources": self.selected_sources,
+            "individual_maes": [info["mae"] for info in all_infos]
+        }
+
+        return observation, avg_reward, done, info
 
     def _run_wave_simulation(self, src_id):
         # -----------------------------------------------------
@@ -114,39 +135,55 @@ class AcousticEnv:
             )
         )
 
-        # override c‑channel with updated c_map
-        data.x[:, 1] = self.c_map
+        # Add full_mesh to data for the solver
+        data.full_mesh = self.full_mesh
 
-        # simulate T
-        T_pred = self.solver.simulate_T(data, src_id)
+        # simulate T on full mesh, but only get receiver values
+        T_receivers = self.solver.simulate_T(data, src_id)
  
-        # put back into data for the agent to observe if desired
-        data.x[:, 0] = T_pred
-        # -----------------------------------------------------
-        # Reward: negative MAE on receiver nodes
-        # -----------------------------------------------------
-        recv_start = self.num_source_nodes
-        recv_end = recv_start + self.num_receiver_nodes
+        # Compute reward using accuracy-based metric
+        reward = self.accuracy_reward(T_receivers, self.tof_matrix[src_id])
+        
+        # For observation, we still need to update the data object
+        # Create a full T tensor with inf values
+        T_full = torch.full((data.num_nodes,), float('inf'), device=self.device)
+        # Set source T to 0
+        T_full[src_id] = 0.0
+        # Set receiver T values
+        receiver_start = self.num_source_nodes
+        receiver_end = receiver_start + self.num_receiver_nodes
+        T_full[receiver_start:receiver_end] = T_receivers
+        # Update data
+        data.x[:, 0] = T_full
 
         print(f"source ID: {src_id}")
-        #print(T_pred[0:recv_start])
         print(f"simulated TOF values:")
-        print(T_pred[recv_start:recv_end])
+        print(T_receivers)
         print(f"real values:")
         print(self.tof_matrix[src_id])
 
-        #exit()
-        mae = (T_pred[recv_start:recv_end] - self.tof_matrix[src_id]).abs().mean()
-        reward = -mae.item()
-        # -----------------------------------------------------
-        # Prepare next observation & done flag
-        # -----------------------------------------------------
-        self.curr_source_idx += 1
-        done = self.curr_source_idx >= len(self.selected_sources)
-        observation = data
-        info = {"mae": mae.item(), "source": src_id}
-        # if episode finished, you might shuffle sources or compute extra stats
-        return observation, reward, done, info
+        # Calculate MAE for info (keeping it for monitoring)
+        mae = (T_receivers - self.tof_matrix[src_id]).abs().mean()
+        info = {"mae": mae.item(), "source": src_id, "reward": reward.item()}
+        return data, reward, False, info
+
+
+    def accuracy_reward(self, pred, target, threshold=80.0, power=25):
+        # Compute percent accuracy per cell (assuming target > 0)
+        accuracy = 100.0 - (100.0 * torch.abs(pred - target) / target.clamp(min=1e-6))
+        # Normalize to [0, 1]
+        raw_score = (accuracy / 100.0).clamp(min=0.0, max=1.0)
+        # Zero out if accuracy < threshold
+        mask = (accuracy >= threshold).float()
+        # Scale using steep power law
+        reward = mask * raw_score.pow(power)
+
+        # Normalize to [0, 1] range (by dividing by max possible value)
+        reward = reward / (1.0 ** power)  # max is 1^power
+
+        return reward.mean()  # average over all cells
+
+
 
     # -------------------------------------------------------------
     def _build_observation(self):
