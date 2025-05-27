@@ -8,12 +8,7 @@ from torch_geometric.data import Data
 
 class GNNPolicy(nn.Module):
     """
-    GNN‑based policy network that outputs, **for every mesh node**, a categorical
-    distribution over a discrete set of candidate c(x,y) values:
-        {0.1, 0.5, 1.2, 1.5, 2.5}
-
-    *Forward* returns *(action_dist, value)* so it is compatible with the PPO
-    agent in **RLAgent**.
+    GNN-based policy that uses GAT layers to process the graph.
     """
 
     # Discrete candidate SoS values (cm / µs or your chosen units)
@@ -21,84 +16,126 @@ class GNNPolicy(nn.Module):
 
     def __init__(
         self,
-        num_sensor_nodes: int,  # S + R  (non‑trainable nodes)
-        input_dim: int = 2,     # (T, distance)
-        hidden_dim: int = 64,
+        num_sensor_nodes: int,
+        in_channels: int = 2,  # ToF and distance
+        hidden_channels: int = 64,
+        num_layers: int = 4,
         num_heads: int = 4,
-        num_layers: int = 4,    # Increased from 2 to 4 layers
+        dropout: float = 0.1,
+        use_skip_connections: bool = True,
     ):
         super().__init__()
         self.num_sensor_nodes = num_sensor_nodes
-
-        # Input normalization
-        self.input_norm = nn.LayerNorm(input_dim)
-
-        # Multiple GAT layers with residual connections
-        self.gat_layers = nn.ModuleList()
-        self.layer_norms = nn.ModuleList()
+        self.use_skip_connections = use_skip_connections
         
-        # First layer
-        self.gat_layers.append(GATConv(input_dim, hidden_dim, heads=num_heads, concat=True))
-        self.layer_norms.append(nn.LayerNorm(hidden_dim * num_heads))
+        # Input projection to ensure consistent dimensions
+        self.input_proj = nn.Linear(in_channels, hidden_channels)
         
-        # Middle layers
-        for _ in range(num_layers - 2):
-            self.gat_layers.append(GATConv(hidden_dim * num_heads, hidden_dim, heads=num_heads, concat=True))
-            self.layer_norms.append(nn.LayerNorm(hidden_dim * num_heads))
+        # GAT layers with consistent hidden dimensions
+        self.gat_layers = nn.ModuleList([
+            GATConv(
+                in_channels=hidden_channels if i == 0 else hidden_channels * num_heads,
+                out_channels=hidden_channels,
+                heads=num_heads,
+                dropout=dropout,
+                concat=True if i < num_layers - 1 else False  # Only last layer doesn't concatenate heads
+            )
+            for i in range(num_layers)
+        ])
         
-        # Final layer
-        self.gat_layers.append(GATConv(hidden_dim * num_heads, hidden_dim, heads=1, concat=False))
-        self.layer_norms.append(nn.LayerNorm(hidden_dim))
-
-        # Policy head → logits per node (16 bins)
-        self.policy_head = nn.Linear(hidden_dim, len(self.C_BINS))
-        # Value head → global state‑value
-        self.value_head = nn.Linear(hidden_dim, 1)
-
-    # -------------------------------------------------------------
-    # Forward
-    # -------------------------------------------------------------
-    def forward(self, data: Data):
-        """Return (action_distribution, value_estimate)."""
-        x, edge_index = data.x, data.edge_index
-
-        # Normalize input features
-        x = self.input_norm(x)
-
-        # GAT layers with residual connections and gradient clipping
-        h = x
+        # Layer normalization for each GAT layer
+        self.layer_norms = nn.ModuleList([
+            nn.LayerNorm(hidden_channels * num_heads if i < num_layers - 1 else hidden_channels)
+            for i in range(num_layers)
+        ])
+        
+        # Output heads
+        self.policy_head = nn.Sequential(
+            nn.Linear(hidden_channels, hidden_channels),
+            nn.LayerNorm(hidden_channels),
+            nn.ReLU(),
+            nn.Linear(hidden_channels, len(self.C_BINS))  # Output logits for each SoS bin
+        )
+        
+        self.value_head = nn.Sequential(
+            nn.Linear(hidden_channels, hidden_channels),
+            nn.LayerNorm(hidden_channels),
+            nn.ReLU(),
+            nn.Linear(hidden_channels, 1)  # Output value estimate
+        )
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            # Use orthogonal initialization with smaller gain
+            nn.init.orthogonal_(module.weight, gain=0.1)
+            if module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+    
+    def forward(self, data):
+        """
+        Forward pass through the GNN.
+        
+        Args:
+            data: PyG Data object containing:
+                - x: Node features [num_nodes, in_channels]
+                - edge_index: Graph connectivity [2, num_edges]
+                - pos: Node positions [num_nodes, 2]
+        
+        Returns:
+            action_dist: Distribution over actions for all mesh nodes
+            value: State value estimate
+        """
+        # Debug input
+        print("Input features:", torch.isnan(data.x).any().item())
+        
+        # Project input features to hidden dimension
+        h = self.input_proj(data.x)        
+        
+        skip_connections = []
+        
+        # Process through GAT layers
         for i, (gat, norm) in enumerate(zip(self.gat_layers, self.layer_norms)):
-            # Apply GAT
-            h_new = gat(h, edge_index)
-            h_new = F.relu(h_new)
-            h_new = norm(h_new)
-            h_new = torch.clamp(h_new, min=-10, max=10)  # Prevent extreme values
+            # Store skip connection before GAT
+            if self.use_skip_connections and i > 0:
+                skip_connections.append(h)
             
-            # Add residual connection if dimensions match
-            if i > 0 and h.shape == h_new.shape:
-                h = h + h_new
-            else:
-                h = h_new
-
-        # ----------------- Value -----------------
+            # Apply GAT
+            h_new = gat(h, data.edge_index)                        
+            h_new = F.relu(h_new)
+            
+            # Add skip connection if available
+            if self.use_skip_connections and i > 0:
+                # Ensure dimensions match by projecting skip connection if needed
+                if h_new.size(-1) != skip_connections[i-1].size(-1):
+                    skip_connections[i-1] = nn.Linear(
+                        skip_connections[i-1].size(-1), 
+                        h_new.size(-1)
+                    ).to(h_new.device)(skip_connections[i-1])
+                h_new = h_new + skip_connections[i-1]
+            
+            # Clip values to prevent explosion
+            h_new = torch.clamp(h_new, min=-10, max=10)
+            h = h_new
+        
+        # Get value estimate using global mean pooling
         batch = torch.zeros(h.size(0), dtype=torch.long, device=h.device)  # single graph
         graph_emb = global_mean_pool(h, batch)
-        value = self.value_head(graph_emb).squeeze(-1)  # shape []
-
-        # ----------------- Policy ----------------
-        logits = self.policy_head(h)  # (N, 16)
         
-        # Ensure logits are finite
-        logits = torch.nan_to_num(logits, nan=0.0, posinf=10.0, neginf=-10.0)
-
+        value = self.value_head(graph_emb).squeeze(-1)
+        # Get action logits for all nodes
+        logits = self.policy_head(h)  # (N, num_bins)
+        
         # Mask out sensor nodes (sources + receivers) so the agent only changes mesh nodes
         if self.num_sensor_nodes > 0:
             sensor_mask = torch.arange(h.size(0), device=h.device) < self.num_sensor_nodes
-            logits[sensor_mask] = -1e9  # effectively zero probability for non‑mesh nodes
-
-        # Create an Independent Categorical over mesh nodes (action dim = num_mesh_nodes)
+            logits[sensor_mask] = -1e9  # effectively zero probability for non-mesh nodes
+        
+        # Create an Independent Categorical over mesh nodes
         dist = Independent(Categorical(logits=logits), 1)  # event_shape = (N,)
-
+        
         return dist, value
 
     # -------------------------------------------------------------

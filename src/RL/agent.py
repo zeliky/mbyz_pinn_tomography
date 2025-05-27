@@ -4,6 +4,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.distributions import Normal
 from typing import List, Tuple
+from .constants import PHYSICS_LOSS_WEIGHT, EIKONAL_TOLERANCE
 
 
 class RolloutBuffer:
@@ -40,6 +41,7 @@ class RLAgent:
         update_epochs: int = 4,
         entropy_coef: float = 0.01,
         value_coef: float = 0.5,
+        physics_weight: float = PHYSICS_LOSS_WEIGHT,
         device: str = "cpu",
     ):
         self.policy = policy.to(device)
@@ -53,6 +55,7 @@ class RLAgent:
         self.update_epochs = update_epochs
         self.entropy_coef = entropy_coef
         self.value_coef = value_coef
+        self.physics_weight = physics_weight
 
         self.buffer = RolloutBuffer()
 
@@ -84,6 +87,24 @@ class RLAgent:
     # PPO Update -------------------------------------------------------
     # ------------------------------------------------------------------
 
+    def compute_physics_loss(self, T, c, pos):
+        """
+        Compute physics-based losses:
+        1. Eikonal equation: |∇T| = 1/c
+        2. Wave equation residual
+        """
+        # Compute gradients of T
+        dx, dy = torch.gradient(T, spacing=(1.0, 1.0))
+        grad_mag = torch.sqrt(dx**2 + dy**2 + EIKONAL_TOLERANCE)
+        
+        # Eikonal equation residual
+        eikonal_residual = (grad_mag - 1.0/c).pow(2).mean()
+        
+        # Add wave equation residual if needed
+        # wave_residual = ...
+        
+        return eikonal_residual
+
     def _compute_returns_and_advantages(self, next_value: torch.Tensor):
         returns = []
         advantages = []
@@ -100,10 +121,14 @@ class RLAgent:
             advantages.insert(0, gae)
             next_val = self.buffer.values[step]
             returns.insert(0, gae + self.buffer.values[step])
+        
         advantages = torch.tensor(advantages, dtype=torch.float32, device=self.device)
         returns = torch.tensor(returns, dtype=torch.float32, device=self.device)
-        # normalize advantages
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
+        # Add value function baseline subtraction
+        advantages = advantages - advantages.mean()
+        # Normalize advantages
+        advantages = advantages / (advantages.std() + 1e-8)
         return returns, advantages
 
     def update_policy(self, next_observation):
@@ -117,10 +142,15 @@ class RLAgent:
         old_logprobs = torch.stack(self.buffer.logprobs).to(self.device)
         old_values = torch.stack(self.buffer.values).to(self.device)
 
-        # Because observations are PyG Data objects, we keep them as list
         dataset = list(zip(self.buffer.observations, old_actions, old_logprobs, returns, advantages))
+        
+        # Add early stopping
+        best_loss = float('inf')
+        patience = 3
+        no_improve = 0
 
-        for _ in range(self.update_epochs):
+        for epoch in range(self.update_epochs):
+            epoch_loss = 0.0
             for obs, act, old_lp, ret, adv in dataset:
                 dist, value = self.policy(obs)
                 logprob = dist.log_prob(act).sum(dim=-1)
@@ -134,14 +164,34 @@ class RLAgent:
                 value_loss = F.mse_loss(value.squeeze(-1), ret)
                 entropy_loss = -entropy.mean()
 
-                loss = policy_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
+                # Compute physics loss
+                T = obs.x[:, 0]  # Time of flight values
+                c = obs.x[:, 1]  # Speed of sound values
+                pos = obs.pos    # Node positions
+                physics_loss = self.compute_physics_loss(T, c, pos)
+
+                # Combine losses with physics weight
+                loss = (policy_loss + 
+                       self.value_coef * value_loss + 
+                       self.entropy_coef * entropy_loss +
+                       self.physics_weight * physics_loss)
+                
+                epoch_loss += loss.item()
 
                 self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
                 self.optimizer.step()
 
-        # clear buffer
+            # Early stopping check
+            if epoch_loss < best_loss:
+                best_loss = epoch_loss
+                no_improve = 0
+            else:
+                no_improve += 1
+                if no_improve >= patience:
+                    break
+
         self.buffer.clear()
 
     # ------------------------------------------------------------------
@@ -149,18 +199,33 @@ class RLAgent:
     # ------------------------------------------------------------------
 
     def train(self, total_episodes: int, max_steps: int = 512):
+        best_reward = float('-inf')
+        reward_history = []
+        
         for ep in range(total_episodes):
             obs = self.env.reset().to(self.device)
             episode_reward = 0.0
+            episode_length = 0
+            
             for step in range(max_steps):
                 action = self.select_action(obs)
-                next_obs, reward, done, _ = self.env.step(action)
+                next_obs, reward, done, info = self.env.step(action)
                 self.store_reward(reward, done)
                 episode_reward += reward
+                episode_length += 1
 
                 if done or step == max_steps - 1:
-                    # compute update & break
                     self.update_policy(next_obs.to(self.device))
-                    print(f"Episode {ep} — reward {episode_reward:.3f}")
+                    
+                    # Track best performance
+                    if episode_reward > best_reward:
+                        best_reward = episode_reward
+                        # Could save best model here
+                    
+                    reward_history.append(episode_reward)
+                    print(f"Episode {ep} — reward {episode_reward:.3f} — length {episode_length}")
                     break
+                    
                 obs = next_obs.to(self.device)
+        
+        return reward_history

@@ -104,7 +104,7 @@ class GraphDataset:
             A tuple (i, x_init) for each source i:
              - i is the source index (0 <= i < self.num_source_nodes).
              - x_init is a tensor of shape (num_total_nodes, 2), where:
-                 x_init[:, 0] = ToF values (0 for source, ToF[i,j] for receivers, inf for mesh)
+                 x_init[:, 0] = ToF values (0 for source, ToF[i,j] for receivers, 1e6 for mesh)
                  x_init[:, 1] = distance from source i
         """
         if not self.initialized:
@@ -120,7 +120,7 @@ class GraphDataset:
 
         for i in selected_sources:
             # node features => (N, 2)
-            x_init = torch.full((total_nodes, 2), float('inf'), dtype=torch.float32, device=device)
+            x_init = torch.full((total_nodes, 2), 1e6, dtype=torch.float32, device=device)  # Use 1e6 instead of inf
 
             # Layer 0: ToF values
             x_init[i, 0] = 0.0  # ToF is 0 at source
@@ -128,7 +128,7 @@ class GraphDataset:
             receiver_start = self.num_source_nodes
             receiver_end = receiver_start + self.num_receiver_nodes
             x_init[receiver_start:receiver_end, 0] = tof_matrix[i]  # Set ToF values for receivers
-            # Mesh nodes remain inf
+            # Mesh nodes remain 1e6
 
             # Layer 1: Distances from source
             source_pos = self.positions[i]

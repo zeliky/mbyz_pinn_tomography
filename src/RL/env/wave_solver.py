@@ -10,49 +10,25 @@ class WaveSolver:
     def __init__(self, num_iterations=5):
         self.num_iterations = num_iterations
 
-    def simulate_T(self, data, src_id):
+    def simulate_T(self, F, source_pos):
         """
-        Compute time-of-flight values using msfm2d, but only for receiver positions.
+        Compute time-of-flight values using msfm2d on the full mesh.
 
         Parameters:
-        - data: PyG Data object containing:
-            - data.x[:, 0] => initial T values
-            - data.x[:, 1] => c (speed of sound)
-            - data.pos => positions (N, 2) in real coordinates (128x128 domain)
-        - src_id: Index of the source node
+        - F: Full mesh tensor (128x128) containing speed of sound values
+        - source_pos: Source position (x, y) in real coordinates
 
         Returns:
-        - T_receivers: Tensor of time-of-flight values for receiver nodes
+        - T_grid: 2D tensor of time-of-flight values for the entire mesh
         """
-        # Get source position
-        positions = data.pos.cpu().numpy()
-        source_pos = positions[src_id]
-
         # Convert source position to grid coordinates
         source_grid = np.array([int(source_pos[0]), int(source_pos[1])]).reshape(1, 2)
 
-        # Get the full mesh from the environment
-        F = data.full_mesh.cpu().numpy()
-        visualize_matdata(F, 'mesh cmap')
-
         # Run msfm2d on the full mesh
-        T_grid = msfm2d(F, source_grid)
+        T_grid = msfm2d(F.cpu().numpy(), source_grid)
         visualize_matdata(T_grid, 'T map')
 
-        # Extract T values only for receiver positions
-        receiver_start = data.num_source_nodes
-        receiver_end = receiver_start + data.num_receiver_nodes
-        receiver_positions = positions[receiver_start:receiver_end]
-        
-        T_receivers = []
-        for x, y in receiver_positions:
-            x_idx = int(x)
-            y_idx = int(y)
-            T_receivers.append(T_grid[y_idx, x_idx])
-
-        # Convert to tensor
-        T_receivers = torch.tensor(T_receivers, dtype=torch.float32, device=data.x.device)
-        return T_receivers
+        return torch.tensor(T_grid, dtype=torch.float32, device=F.device)
 
     def BAK_simulate_T(self, data: Data, src_id):
         """
@@ -80,24 +56,9 @@ class WaveSolver:
         pos = data.pos  # [N, 2]
         mpnn = FMMMessagePassing()
         
-        #print(f"Initial T values for source {src_id}:")
-        #print(f"Source : {src_id}")
-        #print(f"Source T: {T[src_id]}")
-        #print(f"All sources T values: {T[0:32]}")  # Print all source T values
-        #print(f"Number of finite T values: {(T != float('inf')).sum().item()}")
-
         for i in range(self.num_iterations):
             T_old = T.clone()
             T = mpnn(T, c_init, pos, edge_index)
-            
-            # Debug information
-            num_finite = (T != float('inf')).sum().item()
-            #print(f"\nIteration {i+1}:")
-            #print(f"Number of finite T values: {num_finite}")
-            #print(f"T on sources: {T[0:32]}")  # Print all source T values
-            #print(f"T on receivers: {T[32:64]}")
-            #print(f"Min T value: {T.min().item()}")
-            #print(f"Max finite T value: {T[T != float('inf')].max().item() if num_finite > 0 else 'N/A'}")
             
             # Check if T values have converged
             if torch.allclose(T, T_old, rtol=1e-5):

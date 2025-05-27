@@ -23,7 +23,14 @@ class AcousticEnv:
     # -------------------------------------------------------------
     # Construction / Reset
     # -------------------------------------------------------------
-    def __init__(self, config, graph_dataset):
+    def __init__(
+        self,
+        config,
+        graph_dataset,
+        receiver_accuracy_threshold: float = 0.8,  # 80% of receivers must be accurate
+        receiver_tof_threshold: float = 0.2,      # 20% error threshold for each receiver
+        source_completion_threshold: float = 0.8,  # 80% of sources must be done
+    ):
         self.device = config.get("device", "cpu")
         self.c_init = config['c_init']
 
@@ -36,6 +43,11 @@ class AcousticEnv:
         self.selected_sources = list(config.get("selected_sources", range(len(self.sources_positions))))
         self.curr_source_idx = 0  # index into selected_sources list
 
+        # Accuracy thresholds
+        self.receiver_accuracy_threshold = receiver_accuracy_threshold
+        self.receiver_tof_threshold = receiver_tof_threshold
+        self.source_completion_threshold = source_completion_threshold
+
         # graph
         self.graph_dataset = graph_dataset
         self.graph_dataset.build(self.sources_positions, self.receivers_positions)
@@ -44,7 +56,6 @@ class AcousticEnv:
         self.num_receiver_nodes = len(self.receivers_positions)
         self.num_mesh_nodes = self.graph_dataset.num_mesh_nodes
         self.total_nodes = self.num_source_nodes + self.num_receiver_nodes + self.num_mesh_nodes
-
 
         self.full_mesh = torch.full(config['full_mesh_resolution'], self.c_init, device=self.device)
         
@@ -85,11 +96,100 @@ class AcousticEnv:
             y_idx = int(y)
             self.full_mesh[y_idx, x_idx] = AcousticEnv.C_BINS[mesh_actions[i]]
 
+    def _check_source_done(self, T_receivers, target_tof):
+        """
+        Check if a source is 'done' based on receiver accuracy.
+        Returns True if enough receivers have accurate ToF values.
+        """
+        # Calculate relative error for each receiver
+        relative_errors = (T_receivers - target_tof).abs() / (target_tof + 1e-6)
+        
+        # Count receivers with error below threshold
+        accurate_receivers = (relative_errors < self.receiver_tof_threshold).float().mean()
+        
+        # Source is done if enough receivers are accurate
+        return accurate_receivers >= self.receiver_accuracy_threshold
+
+    def _extract_receiver_values(self, T_grid, receiver_positions):
+        """
+        Extract time-of-flight values for receiver positions from the full T grid.
+        
+        Args:
+            T_grid: 2D tensor of time-of-flight values for the entire mesh
+            receiver_positions: Array of receiver positions (x, y)
+            
+        Returns:
+            T_receivers: Tensor of time-of-flight values for receiver nodes
+        """
+        T_receivers = []
+        for x, y in receiver_positions:
+            x_idx = int(x)
+            y_idx = int(y)
+            T_receivers.append(T_grid[y_idx, x_idx])
+        return torch.tensor(T_receivers, dtype=torch.float32, device=T_grid.device)
+
+    def _run_wave_simulation(self, src_id):
+        # -----------------------------------------------------
+        # Wave simulation for the *current* source
+        # -----------------------------------------------------
+
+        (_, data) = next(
+            self.graph_dataset.get_graph(
+                tof_matrix=self.tof_matrix, selected_sources=[src_id], device=self.device
+            )
+        )
+
+        # Get source position
+        source_pos = data.pos[src_id]
+
+        # Simulate T on full mesh
+        T_grid = self.solver.simulate_T(self.full_mesh, source_pos)
+        
+        # Extract T values for receivers
+        receiver_start = self.num_source_nodes
+        receiver_end = receiver_start + self.num_receiver_nodes
+        receiver_positions = data.pos[receiver_start:receiver_end]
+        T_receivers = self._extract_receiver_values(T_grid, receiver_positions)
+ 
+        # Compute reward using accuracy-based metric
+        reward = self.accuracy_reward(T_receivers, self.tof_matrix[src_id])
+        
+        # Check if this source is done
+        source_done = self._check_source_done(T_receivers, self.tof_matrix[src_id])
+        
+        # For observation, we still need to update the data object
+        # Create a full T tensor with inf values
+        T_full = torch.full((data.num_nodes,), 1e6, device=self.device)
+        # Set source T to 0
+        T_full[src_id] = 0.0
+        # Set receiver T values
+        T_full[receiver_start:receiver_end] = T_receivers
+        # Update data
+        data.x[:, 0] = T_full
+
+        print(f"source ID: {src_id}")
+        print(f"simulated TOF values:")
+        print(T_receivers)
+        print(f"real values:")
+        print(self.tof_matrix[src_id])
+
+        # Calculate MAE for info (keeping it for monitoring)
+        mae = (T_receivers - self.tof_matrix[src_id]).abs().mean()
+        info = {
+            "mae": mae.item(), 
+            "source": src_id, 
+            "reward": reward.item(),
+            "source_done": source_done,
+            #"accurate_receivers": (relative_errors < self.receiver_tof_threshold).float().mean().item()
+        }
+        return data, reward, source_done, info
+
     def step(self, action):
         """
         action – LongTensor (N,) with discrete indices produced by the agent.
                  Only mesh nodes (last *num_mesh_nodes*) are applied.
         """
+
         action = torch.as_tensor(action, dtype=torch.long, device=self.device)
         mesh_start = self.num_source_nodes + self.num_receiver_nodes
         mesh_actions = action[mesh_start : mesh_start + self.num_mesh_nodes]
@@ -103,70 +203,35 @@ class AcousticEnv:
         total_mae = 0.0
         all_observations = []
         all_infos = []
+        done_sources = 0
 
         for src_id in self.selected_sources:
-            observation, reward, _, info = self._run_wave_simulation(src_id)
+            observation, reward, source_done, info = self._run_wave_simulation(src_id)
             total_mae += info["mae"]
             all_observations.append(observation)
             all_infos.append(info)
+            if source_done:
+                done_sources += 1
 
         # Compute average reward across all sources
         avg_reward = -total_mae / len(self.selected_sources)
         
+        # Check if enough sources are done
+        sources_done_ratio = done_sources / len(self.selected_sources)
+        mission_done = sources_done_ratio >= self.source_completion_threshold
+        
         # Return the last observation (we could also return all observations if needed)
         observation = all_observations[-1]
-        done = True  # Always done after processing all sources
         info = {
             "mae": total_mae / len(self.selected_sources),
             "sources": self.selected_sources,
-            "individual_maes": [info["mae"] for info in all_infos]
+            "individual_maes": [info["mae"] for info in all_infos],
+            "sources_done_ratio": sources_done_ratio,
+            "done_sources": done_sources,
+            "total_sources": len(self.selected_sources)
         }
 
-        return observation, avg_reward, done, info
-
-    def _run_wave_simulation(self, src_id):
-        # -----------------------------------------------------
-        # Wave simulation for the *current* source
-        # -----------------------------------------------------
-
-        (_, data) = next(
-            self.graph_dataset.get_graph(
-                tof_matrix=self.tof_matrix, selected_sources=[src_id], device=self.device
-            )
-        )
-
-        # Add full_mesh to data for the solver
-        data.full_mesh = self.full_mesh
-
-        # simulate T on full mesh, but only get receiver values
-        T_receivers = self.solver.simulate_T(data, src_id)
- 
-        # Compute reward using accuracy-based metric
-        reward = self.accuracy_reward(T_receivers, self.tof_matrix[src_id])
-        
-        # For observation, we still need to update the data object
-        # Create a full T tensor with inf values
-        T_full = torch.full((data.num_nodes,), float('inf'), device=self.device)
-        # Set source T to 0
-        T_full[src_id] = 0.0
-        # Set receiver T values
-        receiver_start = self.num_source_nodes
-        receiver_end = receiver_start + self.num_receiver_nodes
-        T_full[receiver_start:receiver_end] = T_receivers
-        # Update data
-        data.x[:, 0] = T_full
-
-        print(f"source ID: {src_id}")
-        print(f"simulated TOF values:")
-        print(T_receivers)
-        print(f"real values:")
-        print(self.tof_matrix[src_id])
-
-        # Calculate MAE for info (keeping it for monitoring)
-        mae = (T_receivers - self.tof_matrix[src_id]).abs().mean()
-        info = {"mae": mae.item(), "source": src_id, "reward": reward.item()}
-        return data, reward, False, info
-
+        return observation, avg_reward, mission_done, info
 
     def accuracy_reward(self, pred, target, threshold=80.0, power=25):
         # Compute percent accuracy per cell (assuming target > 0)
