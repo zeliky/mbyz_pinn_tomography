@@ -198,10 +198,9 @@ class RLAgent:
     # Training Loop ----------------------------------------------------
     # ------------------------------------------------------------------
 
-    def train(self, total_episodes: int, max_steps: int = 512):
+    def train(self, total_episodes: int, max_steps: int = 10):
         best_reward = float('-inf')
         reward_history = []
-        
         for ep in range(total_episodes):
             obs = self.env.reset().to(self.device)
             episode_reward = 0.0

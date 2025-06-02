@@ -128,6 +128,23 @@ class AcousticEnv:
             T_receivers.append(T_grid[y_idx, x_idx])
         return torch.tensor(T_receivers, dtype=torch.float32, device=T_grid.device)
 
+    def _extract_mesh_values(self, T_grid, mesh_positions):
+        """
+        Extract time-of-flight values for receiver positions from the full T grid.
+
+        Args:
+            T_grid: 2D tensor of time-of-flight values for the entire mesh
+            mesh_positions: Array of receiver positions (x, y)
+
+        Returns:
+            T_mesh: Tensor of time-of-flight values for mesh nodes
+        """
+        T_mesh = []
+        for x, y in mesh_positions:
+            x_idx = int(x)
+            y_idx = int(y)
+            T_mesh.append(T_grid[y_idx, x_idx])
+        return torch.tensor(T_mesh, dtype=torch.float32, device=T_grid.device)
     def _run_wave_simulation(self, src_id):
         # -----------------------------------------------------
         # Wave simulation for the *current* source
@@ -149,29 +166,22 @@ class AcousticEnv:
         receiver_start = self.num_source_nodes
         receiver_end = receiver_start + self.num_receiver_nodes
         receiver_positions = data.pos[receiver_start:receiver_end]
+
         T_receivers = self._extract_receiver_values(T_grid, receiver_positions)
- 
+        T_full = self._extract_mesh_values(T_grid,  data.pos)
+
         # Compute reward using accuracy-based metric
         reward = self.accuracy_reward(T_receivers, self.tof_matrix[src_id])
         
         # Check if this source is done
         source_done = self._check_source_done(T_receivers, self.tof_matrix[src_id])
-        
-        # For observation, we still need to update the data object
-        # Create a full T tensor with inf values
-        T_full = torch.full((data.num_nodes,), 1e6, device=self.device)
-        # Set source T to 0
-        T_full[src_id] = 0.0
-        # Set receiver T values
-        T_full[receiver_start:receiver_end] = T_receivers
-        # Update data
         data.x[:, 0] = T_full
 
-        print(f"source ID: {src_id}")
-        print(f"simulated TOF values:")
-        print(T_receivers)
-        print(f"real values:")
-        print(self.tof_matrix[src_id])
+        #print(f"source ID: {src_id}")
+        #print(f"simulated TOF values:")
+        #print(T_receivers)
+        #print(f"real values:")
+        #print(self.tof_matrix[src_id])
 
         # Calculate MAE for info (keeping it for monitoring)
         mae = (T_receivers - self.tof_matrix[src_id]).abs().mean()
@@ -200,21 +210,21 @@ class AcousticEnv:
         self.c_map[mesh_start:] = AcousticEnv.C_BINS[mesh_actions]
 
         # Run wave simulation for all selected sources
-        total_mae = 0.0
+        total_accuracy_rewards = 0.0
         all_observations = []
         all_infos = []
         done_sources = 0
 
         for src_id in self.selected_sources:
             observation, reward, source_done, info = self._run_wave_simulation(src_id)
-            total_mae += info["mae"]
+            total_accuracy_rewards += reward
             all_observations.append(observation)
             all_infos.append(info)
             if source_done:
                 done_sources += 1
 
         # Compute average reward across all sources
-        avg_reward = -total_mae / len(self.selected_sources)
+        avg_reward = -total_accuracy_rewards / len(self.selected_sources)
         
         # Check if enough sources are done
         sources_done_ratio = done_sources / len(self.selected_sources)
@@ -223,29 +233,25 @@ class AcousticEnv:
         # Return the last observation (we could also return all observations if needed)
         observation = all_observations[-1]
         info = {
-            "mae": total_mae / len(self.selected_sources),
             "sources": self.selected_sources,
             "individual_maes": [info["mae"] for info in all_infos],
             "sources_done_ratio": sources_done_ratio,
             "done_sources": done_sources,
-            "total_sources": len(self.selected_sources)
+            "total_sources": len(self.selected_sources),
+            "avg_reward": avg_reward
         }
+        return observation, total_accuracy_rewards, mission_done, info
 
-        return observation, avg_reward, mission_done, info
-
-    def accuracy_reward(self, pred, target, threshold=80.0, power=25):
+    def accuracy_reward(self, pred, target, power=30, multiple=1e-30):
         # Compute percent accuracy per cell (assuming target > 0)
         accuracy = 100.0 - (100.0 * torch.abs(pred - target) / target.clamp(min=1e-6))
         # Normalize to [0, 1]
-        raw_score = (accuracy / 100.0).clamp(min=0.0, max=1.0)
-        # Zero out if accuracy < threshold
-        mask = (accuracy >= threshold).float()
+
         # Scale using steep power law
-        reward = mask * raw_score.pow(power)
+        reward = multiple * accuracy.pow(power)
 
         # Normalize to [0, 1] range (by dividing by max possible value)
         reward = reward / (1.0 ** power)  # max is 1^power
-
         return reward.mean()  # average over all cells
 
 

@@ -88,9 +88,6 @@ class GNNPolicy(nn.Module):
             action_dist: Distribution over actions for all mesh nodes
             value: State value estimate
         """
-        # Debug input
-        print("Input features:", torch.isnan(data.x).any().item())
-        
         # Project input features to hidden dimension
         h = self.input_proj(data.x)        
         

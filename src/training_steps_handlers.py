@@ -106,8 +106,8 @@ class RLAgetTrainingStep(BaseTrainingStep):
         self.mesh_node_k = kwargs.get('mesh_node_k',12)
         self.sensor_k = kwargs.get('sensor_k', 20)
         self.c_init = kwargs.get('c_init',0.8)
-        self.gd = GraphDataset(c_init=self.c_init , x_range=(10, 120),
-                                     y_range=(10, 120), nx=self.grid_res, ny=self.grid_res,
+        self.gd = GraphDataset(c_init=self.c_init , x_range=(1, 127),
+                                     y_range=(1, 127), nx=self.grid_res, ny=self.grid_res,
                                      mesh_node_k=self.mesh_node_k)
 
         self.env = None
@@ -116,7 +116,7 @@ class RLAgetTrainingStep(BaseTrainingStep):
         sources_positions = batch['x_s'].squeeze()
         receivers_positions = batch['x_r'].squeeze()
         tof = batch['raw_tof'].squeeze().float().to(self.device)
-        num_sources = app_settings.sources_amount
+        num_sources = int(app_settings.sources_amount / 6)
         sources = random.sample(range(num_sources), k=num_sources)
         if not self.gd.initialized:
             self.gd.build(sources_positions, receivers_positions)
@@ -129,10 +129,12 @@ class RLAgetTrainingStep(BaseTrainingStep):
             'tof_matrix': tof,
             'selected_sources': sources,
         }
-        self.env = AcousticEnv(config,  self.gd )
+        self.env = AcousticEnv(config,  self.gd)
 
         agent = RLAgent(self.model, self.env, device=self.device)
         agent.train(total_episodes=5, max_steps=10)
+
+        return loss_total, n_mse_loss, w_mse_loss, w
 
     def eval_model(self, batch):
         sources_positions = batch['x_s'].squeeze()
