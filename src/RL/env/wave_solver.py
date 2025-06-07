@@ -5,6 +5,7 @@ from torch_geometric.nn import GATConv, MessagePassing
 from scipy.interpolate import griddata
 from py2mat.msfm2d import msfm2d
 from logger import visualize_matdata
+
 class WaveSolver:
 
     def __init__(self, num_iterations=5):
@@ -25,10 +26,26 @@ class WaveSolver:
         source_grid = np.array([int(source_pos[0]), int(source_pos[1])]).reshape(1, 2)
 
         # Run msfm2d on the full mesh
-        T_grid = msfm2d(F.cpu().numpy(), source_grid)
+        T_grid = msfm2d(F.detach().cpu().numpy(), source_grid)
         visualize_matdata(T_grid, 'T map')
 
-        return torch.tensor(T_grid, dtype=torch.float32, device=F.device)
+        # Convert back to tensor and maintain gradients
+        T_tensor = torch.tensor(T_grid, dtype=torch.float32, device=F.device)
+        
+        # Create a differentiable version of T_grid
+        T_diff = T_tensor.clone().detach().requires_grad_(True)
+        
+        # Compute gradients through interpolation
+        dx, dy = torch.gradient(T_diff, spacing=(1.0, 1.0))
+        grad_mag = torch.sqrt(dx ** 2 + dy ** 2 + 1e-6)
+        
+        # Eikonal equation: |∇T| = 1/c
+        eikonal_residual = (grad_mag - 1.0 / F).pow(2).mean()
+        
+        # Add gradient information
+        T_diff.register_hook(lambda grad: grad * (1.0 + eikonal_residual))
+        
+        return T_diff
 
     def BAK_simulate_T(self, data: Data, src_id):
         """

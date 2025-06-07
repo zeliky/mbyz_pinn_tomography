@@ -98,7 +98,7 @@ class TofDataset(Dataset):
         return {
             'anatomy': anatomy_img,
             'tof': tof_img,
-            'sos': mat_data['sos'],
+            'raw_sos': mat_data['sos'],
             'raw_tof': mat_data['raw_tof'],
             #'raw_sos': mat_data['V'],
             #'expanded_tof': mat_data['expanded_tof'],

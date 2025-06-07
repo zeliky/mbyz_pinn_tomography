@@ -94,18 +94,21 @@ class GraphDataset:
 
     def get_graph(self, tof_matrix, selected_sources, device):
         """
-        Generator function that yields node feature matrices (x_init) for each source i.
+        Generator function that yields node feature matrices for each source i.
         Args:
             tof_matrix: (S, R) tensor or array of measured ToF values (S sources, R receivers),
                         tof_matrix[i, j] = measured time-of-flight from source i to receiver j.
             selected_sources:  the indexes of sources the graph will be based on
             device: GPU / CPU
         Yields:
-            A tuple (i, x_init) for each source i:
+            A tuple (i, data) for each source i:
              - i is the source index (0 <= i < self.num_source_nodes).
-             - x_init is a tensor of shape (num_total_nodes, 2), where:
-                 x_init[:, 0] = ToF values (0 for source, ToF[i,j] for receivers, 1e6 for mesh)
-                 x_init[:, 1] = distance from source i
+             - data is a PyG Data object with:
+                 data.x[:, 0] = ToF values
+                 data.x[:, 1] = mean ToF per receiver (0 for source/mesh)
+                 data.x[:, 2] = std ToF per receiver (0 for source/mesh)
+                 data.x[:, 3] = role encoding (1=source, 2=receiver, 3=mesh)
+                 data.x[:, 4:6] = normalized coordinates
         """
         if not self.initialized:
             raise ValueError("GraphDataset not built yet!")
@@ -115,33 +118,51 @@ class GraphDataset:
 
         total_nodes = self.num_source_nodes + self.num_receiver_nodes + self.num_mesh_nodes
 
+        # Convert positions to tensor and normalize coordinates
         pos_tensor = torch.tensor(self.positions, dtype=torch.float32, device=device)
+        coords_normalized = pos_tensor / 128.0  # Normalize to [0,1] range
+
+        # Compute ToF statistics per receiver using only selected sources
+        selected_tof = tof_matrix[selected_sources]
+        tof_mean = selected_tof.mean(dim=0)  # Mean ToF per receiver
+        tof_std = selected_tof.std(dim=0)    # Std ToF per receiver
+        tof_std = torch.clamp(tof_std, min=1e-6)  # Avoid division by zero
+
         edge_index = torch.tensor(self.global_edges, dtype=torch.long, device=device).T  # (2, E)
 
-        for i in selected_sources:
-            # node features => (N, 2)
-            x_init = torch.full((total_nodes, 2), 1e6, dtype=torch.float32, device=device)  # Use 1e6 instead of inf
+    
+        # Initialize feature tensors
+        c_init = torch.full((total_nodes,), self.c_init, dtype=torch.float32, device=device)
+        mean_values = torch.full((total_nodes,), 1e-6, dtype=torch.float32, device=device)
+        std_values = torch.full((total_nodes,), 1e-6, dtype=torch.float32, device=device)
 
-            # Layer 0: ToF values
-            x_init[i, 0] = 0.0  # ToF is 0 at source
-            # Set ToF values for receivers (from tof_matrix)
-            receiver_start = self.num_source_nodes
-            receiver_end = receiver_start + self.num_receiver_nodes
-            x_init[receiver_start:receiver_end, 0] = tof_matrix[i]  # Set ToF values for receivers
-            # Mesh nodes remain 1e6
+        role_values = torch.zeros((total_nodes,), dtype=torch.float32, device=device)
 
-            # Layer 1: Distances from source
-            source_pos = self.positions[i]
-            distances = np.array([np.linalg.norm(pos - source_pos) for pos in self.positions])
-            x_init[:, 1] = torch.tensor(distances, dtype=torch.float32, device=device)
+        # Set receiver values
+        receiver_start = self.num_source_nodes
+        receiver_end = receiver_start + self.num_receiver_nodes            
+        mean_values[receiver_start:receiver_end] = tof_mean
+        std_values[receiver_start:receiver_end] = tof_std
+        
+        role_values[0:receiver_start] = 1.0 # Source role
+        role_values[receiver_start:receiver_end] = 2.0  # Receiver role
+        role_values[receiver_end:] = 3.0  # Mesh role
+        
+        # Stack all features
+        x = torch.stack([
+            c_init,                    # Current SOS values
+            mean_values,                    # Mean ToF per receiver
+            std_values,                     # Std ToF per receiver
+            role_values,                    # Role encoding
+        ], dim=-1)
 
-            data = Data(
-                x=x_init,
-                edge_index=edge_index,
-                pos=pos_tensor
-            )
- 
-            yield i, data
+        data = Data(
+            x=x,
+            edge_index=edge_index,
+            pos=pos_tensor
+        )
+
+        yield data
 
     def _create_interior_mesh(self):
         """

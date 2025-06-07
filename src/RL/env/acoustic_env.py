@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import torch.nn as nn
 from torch_geometric.data import Data
 from logger import visualize_matdata
 from .wave_solver import WaveSolver   # assumes the WaveSolver text‑doc is saved as wave_solver.py on disk
@@ -37,11 +38,12 @@ class AcousticEnv:
         # positions & ground‑truth ToF
         self.sources_positions = np.asarray(config["sources_positions"], dtype=np.float32)
         self.receivers_positions = np.asarray(config["receivers_positions"], dtype=np.float32)
-        self.tof_matrix = torch.tensor(config["tof_matrix"], dtype=torch.float32, device=self.device).clone().detach()
+        self.tof_matrix = config["tof_matrix"].to(self.device)
+        self.sos_matrix = config["sos_matrix"].to(self.device)
 
         # selected sources per episode (can be 1..S)
         self.selected_sources = list(config.get("selected_sources", range(len(self.sources_positions))))
-        self.curr_source_idx = 0  # index into selected_sources list
+
 
         # Accuracy thresholds
         self.receiver_accuracy_threshold = receiver_accuracy_threshold
@@ -61,8 +63,6 @@ class AcousticEnv:
         
         # speed map – initialise with middle bin (1.2)
         self.c_map = torch.full((self.total_nodes,), self.c_init, device=self.device)
-        # keep sensor nodes fixed (optional – could also let them vary)
-        self.c_map[: self.num_source_nodes + self.num_receiver_nodes] = self.c_init
 
         # solver
         self.solver = WaveSolver(num_iterations=20)
@@ -72,7 +72,8 @@ class AcousticEnv:
         """Reset environment state & return initial observation (PyG list)."""
         self.c_map[self.num_source_nodes + self.num_receiver_nodes :] = self.c_init  # mesh reset
         self.full_mesh = torch.full(self.full_mesh.shape, self.c_init, device=self.device)
-        return self._build_observation()
+        self.observation = self._build_observation()
+        return self.observation
 
     def test_cmap(self, c_map, src_id):
         #mesh_start = self.num_source_nodes + self.num_receiver_nodes
@@ -87,14 +88,26 @@ class AcousticEnv:
         mesh_start = self.num_source_nodes + self.num_receiver_nodes
         mesh_positions = self.graph_dataset.positions[mesh_start:]
         
-        # Reset mesh to base value
-        self.full_mesh.fill_(self.c_init)
+        # Update c_map with mesh actions
+        self.c_map = self.c_map.clone()
+        self.c_map[self.num_source_nodes + self.num_receiver_nodes:] += mesh_actions
+
+        # Create a new full mesh tensor
+        new_full_mesh = self.full_mesh.clone()
         
-        # Update mesh with agent actions
-        for i, (x, y) in enumerate(mesh_positions):
-            x_idx = int(x)
-            y_idx = int(y)
-            self.full_mesh[y_idx, x_idx] = AcousticEnv.C_BINS[mesh_actions[i]]
+        # Update mesh with agent actions using scatter
+        indices = torch.tensor([[int(y), int(x)] for x, y in mesh_positions], device=self.device)
+        values = self.c_map[mesh_start:mesh_start + self.num_mesh_nodes]
+        
+        # Reshape indices and values for scatter
+        indices = indices.t()  # Transpose to [2, num_points]
+        #values = values.unsqueeze(0)  # Add batch dimension [1, num_points]
+        
+        # Use scatter_ to update values
+        new_full_mesh.scatter_(0, indices, values)
+        
+        # Update the full mesh
+        self.full_mesh = new_full_mesh
 
     def _check_source_done(self, T_receivers, target_tof):
         """
@@ -145,54 +158,50 @@ class AcousticEnv:
             y_idx = int(y)
             T_mesh.append(T_grid[y_idx, x_idx])
         return torch.tensor(T_mesh, dtype=torch.float32, device=T_grid.device)
+
     def _run_wave_simulation(self, src_id):
-        # -----------------------------------------------------
-        # Wave simulation for the *current* source
-        # -----------------------------------------------------
+        source_pos = self.sources_positions[src_id]
+        receiver_positions = self.receivers_positions
 
-        (_, data) = next(
-            self.graph_dataset.get_graph(
-                tof_matrix=self.tof_matrix, selected_sources=[src_id], device=self.device
-            )
-        )
+        # Ensure full_mesh has gradients
+        self.full_mesh.requires_grad_(True)
 
-        # Get source position
-        source_pos = data.pos[src_id]
-
-        # Simulate T on full mesh
+        # Simulate T on full mesh - ensure solver returns tensor with grads
         T_grid = self.solver.simulate_T(self.full_mesh, source_pos)
+        if not isinstance(T_grid, torch.Tensor):
+            T_grid = torch.tensor(T_grid, device=self.device, requires_grad=True)
         
-        # Extract T values for receivers
-        receiver_start = self.num_source_nodes
-        receiver_end = receiver_start + self.num_receiver_nodes
-        receiver_positions = data.pos[receiver_start:receiver_end]
-
         T_receivers = self._extract_receiver_values(T_grid, receiver_positions)
-        T_full = self._extract_mesh_values(T_grid,  data.pos)
 
         # Compute reward using accuracy-based metric
         reward = self.accuracy_reward(T_receivers, self.tof_matrix[src_id])
-        
+
         # Check if this source is done
         source_done = self._check_source_done(T_receivers, self.tof_matrix[src_id])
-        data.x[:, 0] = T_full
 
-        #print(f"source ID: {src_id}")
-        #print(f"simulated TOF values:")
-        #print(T_receivers)
-        #print(f"real values:")
-        #print(self.tof_matrix[src_id])
+        print(f"source ID: {src_id}")
+        print(f"simulated TOF values:")
+        print(T_receivers)
+        print(f"real values:")
+        print(self.tof_matrix[src_id])
 
-        # Calculate MAE for info (keeping it for monitoring)
-        mae = (T_receivers - self.tof_matrix[src_id]).abs().mean()
-        info = {
-            "mae": mae.item(), 
-            "source": src_id, 
-            "reward": reward.item(),
+        T = T_grid  # Time of flight values
+        c = self.full_mesh  # Speed of sound values
+        physics_loss = self._compute_physics_loss(T, c)
+
+        criterion = nn.MSELoss()
+        boundary_loss = criterion(T_receivers, self.tof_matrix[src_id])
+
+        mse_loss = criterion(c, self.sos_matrix)
+        return {
+            "source": src_id,
+            "boundary_loss": boundary_loss,
+            "mse_loss": mse_loss,
+            "reward": reward,
             "source_done": source_done,
-            #"accurate_receivers": (relative_errors < self.receiver_tof_threshold).float().mean().item()
+            "pde_loss": physics_loss
         }
-        return data, reward, source_done, info
+
 
     def step(self, action):
         """
@@ -200,32 +209,46 @@ class AcousticEnv:
                  Only mesh nodes (last *num_mesh_nodes*) are applied.
         """
 
-        action = torch.as_tensor(action, dtype=torch.long, device=self.device)
+        action = torch.as_tensor(action, device=self.device)
         mesh_start = self.num_source_nodes + self.num_receiver_nodes
         mesh_actions = action[mesh_start : mesh_start + self.num_mesh_nodes]
         
         # Update full mesh with agent actions
         self._update_full_mesh(mesh_actions)
-        # Update c_map for the graph nodes
-        self.c_map[mesh_start:] = AcousticEnv.C_BINS[mesh_actions]
 
         # Run wave simulation for all selected sources
         total_accuracy_rewards = 0.0
+        total_pde_loss = 0.0
+        total_mse_loss = 0.0
         all_observations = []
         all_infos = []
         done_sources = 0
 
+        self.observation.x[:, 0] = self.c_map
+        all_observations.append(self.observation)
+
+        checked_sources = 0
         for src_id in self.selected_sources:
-            observation, reward, source_done, info = self._run_wave_simulation(src_id)
-            total_accuracy_rewards += reward
-            all_observations.append(observation)
+            info = self._run_wave_simulation(src_id)
+            print(f"reward: {info['reward']}")
+            total_accuracy_rewards += info['reward']
+            total_pde_loss += info['pde_loss']
+            total_mse_loss += info['mse_loss']
+            total_accuracy_rewards += info['reward']
             all_infos.append(info)
-            if source_done:
+            checked_sources+=1
+            if info['reward'] < 0.5:
+                print(f"reward is too low - break")
+                break
+
+            if info['source_done']:
                 done_sources += 1
 
         # Compute average reward across all sources
-        avg_reward = -total_accuracy_rewards / len(self.selected_sources)
-        
+        avg_reward = -total_accuracy_rewards / checked_sources
+        avg_pde_loss = total_pde_loss / checked_sources
+        avg_mse_loss = total_mse_loss / checked_sources
+
         # Check if enough sources are done
         sources_done_ratio = done_sources / len(self.selected_sources)
         mission_done = sources_done_ratio >= self.source_completion_threshold
@@ -234,24 +257,23 @@ class AcousticEnv:
         observation = all_observations[-1]
         info = {
             "sources": self.selected_sources,
-            "individual_maes": [info["mae"] for info in all_infos],
             "sources_done_ratio": sources_done_ratio,
             "done_sources": done_sources,
-            "total_sources": len(self.selected_sources),
-            "avg_reward": avg_reward
+            "checked_sources": checked_sources,
+            "avg_reward": avg_reward,
+            "avg_pde_loss": avg_pde_loss,
+            "avg_mse_loss": avg_mse_loss
         }
         return observation, total_accuracy_rewards, mission_done, info
 
-    def accuracy_reward(self, pred, target, power=30, multiple=1e-30):
+    def accuracy_reward(self, pred, target, power=10, multiple=1e-20):
         # Compute percent accuracy per cell (assuming target > 0)
-        accuracy = 100.0 - (100.0 * torch.abs(pred - target) / target.clamp(min=1e-6))
+        accuracy = 100 - (100* torch.abs(pred - target) / target.clamp(min=1e-6))
         # Normalize to [0, 1]
 
         # Scale using steep power law
         reward = multiple * accuracy.pow(power)
 
-        # Normalize to [0, 1] range (by dividing by max possible value)
-        reward = reward / (1.0 ** power)  # max is 1^power
         return reward.mean()  # average over all cells
 
 
@@ -259,16 +281,33 @@ class AcousticEnv:
     # -------------------------------------------------------------
     def _build_observation(self):
         """Helper to build initial observation for the first source."""
-        src_id = self.selected_sources[self.curr_source_idx]
-        (_, data) = next(
+        data = next(
             self.graph_dataset.get_graph(
-                tof_matrix=self.tof_matrix, selected_sources=[src_id], device=self.device
+                tof_matrix=self.tof_matrix, selected_sources=self.selected_sources, device=self.device
             )
         )
         # insert current c map
-        data.x[:, 1] = self.c_map
+        data.x[:, 0] = self.c_map
         return data
 
     # -------------------------------------------------------------
     def render(self, mode="human"):
         pass
+
+    def _compute_physics_loss(self, T, c):
+        """
+        Compute physics-based losses:
+        1. Eikonal equation: |∇T| = 1/c
+        2. Wave equation residual
+        """
+        # Compute gradients of T
+        dx, dy = torch.gradient(T, spacing=(1.0, 1.0))
+        grad_mag = torch.sqrt(dx ** 2 + dy ** 2 + 1e-6)
+
+        # Eikonal equation residual
+        eikonal_residual = (grad_mag - 1.0 / c).pow(2).mean()
+
+        # Add wave equation residual if needed
+        # wave_residual = ...
+
+        return eikonal_residual

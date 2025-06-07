@@ -67,15 +67,11 @@ class RLAgent:
         """Run policy → sample action → store transition in buffer."""
         # policy must internally handle PyG Data object
         with torch.no_grad():
-            dist, value = self.policy(observation)
-        action = dist.sample()
-        logprob = dist.log_prob(action).sum(dim=-1)  # sum over action dims if multi-dim
-
+            action = self.policy(observation)
         # store
         self.buffer.observations.append(observation)
         self.buffer.actions.append(action)
-        self.buffer.logprobs.append(logprob)
-        self.buffer.values.append(value)
+
 
         return action.cpu().numpy()  # env may expect numpy
 
@@ -87,23 +83,7 @@ class RLAgent:
     # PPO Update -------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def compute_physics_loss(self, T, c, pos):
-        """
-        Compute physics-based losses:
-        1. Eikonal equation: |∇T| = 1/c
-        2. Wave equation residual
-        """
-        # Compute gradients of T
-        dx, dy = torch.gradient(T, spacing=(1.0, 1.0))
-        grad_mag = torch.sqrt(dx**2 + dy**2 + EIKONAL_TOLERANCE)
-        
-        # Eikonal equation residual
-        eikonal_residual = (grad_mag - 1.0/c).pow(2).mean()
-        
-        # Add wave equation residual if needed
-        # wave_residual = ...
-        
-        return eikonal_residual
+
 
     def _compute_returns_and_advantages(self, next_value: torch.Tensor):
         returns = []
@@ -198,33 +178,48 @@ class RLAgent:
     # Training Loop ----------------------------------------------------
     # ------------------------------------------------------------------
 
-    def train(self, total_episodes: int, max_steps: int = 10):
-        best_reward = float('-inf')
+    def train(self, max_steps):
+        optimizer = optim.Adam(self.policy.parameters(), lr=1e-4)
         reward_history = []
-        for ep in range(total_episodes):
-            obs = self.env.reset().to(self.device)
-            episode_reward = 0.0
-            episode_length = 0
-            
-            for step in range(max_steps):
-                action = self.select_action(obs)
-                next_obs, reward, done, info = self.env.step(action)
-                self.store_reward(reward, done)
-                episode_reward += reward
-                episode_length += 1
+        obs = self.env.reset().to(self.device)
 
-                if done or step == max_steps - 1:
-                    self.update_policy(next_obs.to(self.device))
-                    
-                    # Track best performance
-                    if episode_reward > best_reward:
-                        best_reward = episode_reward
-                        # Could save best model here
-                    
-                    reward_history.append(episode_reward)
-                    print(f"Episode {ep} — reward {episode_reward:.3f} — length {episode_length}")
-                    break
-                    
-                obs = next_obs.to(self.device)
+        episode_reward = 0.0
+        episode_length = 0
+
+        r_weight = 1
+        p_weight = 1e-6  # Small weight for PDE loss
+        m_weight = 1e-6  # Small weight for MSE loss
+        for step in range(max_steps):
+            # Get action (ΔSoS) from policy
+            action = self.select_action(obs)
+            
+            # Step environment - update SoS and compute physics loss
+            next_obs, reward, done, info = self.env.step(action)
+
+            # Get losses from environment
+            r_loss = info['avg_reward']  # Reward-based loss
+            p_loss = info['avg_pde_loss']  # Physics (Eikonal) loss
+            m_loss = info['avg_mse_loss']  # SoS prediction loss
+
+            # Combine losses to guide policy
+            loss = r_weight * r_loss + p_weight * p_loss + m_weight * m_loss
+            
+            # Backpropagate to improve policy's actions
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # Store transition for PPO update
+            self.store_reward(reward, done)
+            episode_reward += reward
+            episode_length += 1
+            obs = next_obs.to(self.device)
+
+            if done:
+                self.update_policy(obs)
+                reward_history.append(episode_reward)
+                episode_reward = 0.0
+                episode_length = 0
+                obs = self.env.reset().to(self.device)
         
         return reward_history
