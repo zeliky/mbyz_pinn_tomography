@@ -5,20 +5,21 @@ from scipy.spatial import cKDTree
 import torch.nn.functional as F
 
 
+
 class GraphDataset:
     def __init__(self, **kwargs):
-        self.c_init = kwargs.get('c_init', 0.12)
-        self.t_init = kwargs.get('t_init', 0)
+        self.c_init = kwargs.get('c_init')
+        self.t_init = kwargs.get('t_init')
         self.epsilon = 1e-5
-        self.x_range = kwargs.get('x_range', (32, 97))
-        self.y_range = kwargs.get('y_range', (32, 97))
-        self.nx = kwargs.get('nx', 8)
-        self.ny = kwargs.get('ny', 8)
+        self.x_range = kwargs.get('x_range')
+        self.y_range = kwargs.get('y_range')
+        self.nx = kwargs.get('nx')
+        self.ny = kwargs.get('ny')
 
         # Connectivity parameters
-        self.mesh_node_k = kwargs.get('mesh_node_k', 20)
-        self.sensor_k = kwargs.get('sensor_k', 8)
-        self.bidirectional = kwargs.get('bidirectional', True)  # to toggle directed vs undirected
+        self.mesh_node_k = kwargs.get('mesh_node_k')
+        self.sensor_k = kwargs.get('sensor_k')
+        self.bidirectional = kwargs.get('bidirectional', False)  # to toggle directed vs undirected
 
         # S/R counts
         self.num_source_nodes = kwargs.get('num_source_nodes', 32)
@@ -48,24 +49,24 @@ class GraphDataset:
         #    a) mesh <-> mesh
         mesh_edges = self._build_mesh_edges()
         #    b) sources -> mesh
-        src_edges = self._connect_sensors_to_mesh(
-            sensor_indices=range(self.num_source_nodes),
-            sensor_positions=sources_positions,sensor_type='S'
-        )
+        #src_edges = self._connect_sensors_to_mesh(
+        #    sensor_indices=range(self.num_source_nodes),
+        #    sensor_positions=sources_positions,sensor_type='S'
+        #)
         #    c) receivers -> mesh
-        rcv_offsets = range(self.num_source_nodes, self.num_source_nodes + self.num_receiver_nodes)
-        rcv_edges = self._connect_sensors_to_mesh(
-            sensor_indices=rcv_offsets,
-            sensor_positions=receivers_positions, sensor_type='R'
-        )
+        #rcv_offsets = range(self.num_source_nodes, self.num_source_nodes + self.num_receiver_nodes)
+        #rcv_edges = self._connect_sensors_to_mesh(
+        #    sensor_indices=rcv_offsets,
+        #    sensor_positions=receivers_positions, sensor_type='R'
+        #)
 
         # Combine all edges
-        edges_all = np.concatenate((mesh_edges, src_edges, rcv_edges), axis=0)
+        #edges_all = np.concatenate((mesh_edges, src_edges, rcv_edges), axis=0)
   
         # Remove duplicates & unify
-        structured = np.zeros((edges_all.shape[0], 2))  # (i, j)
-        structured[:, 0:2] = edges_all
 
+        structured = np.zeros((mesh_edges.shape[0], 2))  # (i, j)
+        structured[:, 0:2] = mesh_edges
         unique_set = set()
         unique_list = []
         for row in structured:
@@ -77,19 +78,6 @@ class GraphDataset:
                 unique_list.append([i, j])
 
         unique_arr = np.array(unique_list)
-
-        #  add reverse unless they exist
-        total_sensor_nodes = self.num_source_nodes + self.num_receiver_nodes
-        if self.bidirectional:
-            reverse_list = []
-            for e in unique_arr:
-                i, j = e
-                if i>total_sensor_nodes and j> total_sensor_nodes and (j, i) not in unique_set:
-                    reverse_list.append([j, i])
-            if len(reverse_list) > 0:
-                reverse_arr = np.array(reverse_list)
-                unique_arr = np.concatenate((unique_arr, reverse_arr), axis=0)
-
         self.global_edges = unique_arr.astype(np.int64)  # shape => (E, 2)
 
     def get_graph(self, tof_matrix, selected_sources, device):
@@ -144,16 +132,18 @@ class GraphDataset:
         mean_values[receiver_start:receiver_end] = tof_mean
         std_values[receiver_start:receiver_end] = tof_std
         
-        role_values[0:receiver_start] = 1.0 # Source role
-        role_values[receiver_start:receiver_end] = 2.0  # Receiver role
-        role_values[receiver_end:] = 3.0  # Mesh role
-        
+        role_values[0:receiver_start] = 0 # Source role
+        role_values[receiver_start:receiver_end] = 0  # Receiver role
+        role_values[receiver_end:] = 1  # Mesh role
+
         # Stack all features
         x = torch.stack([
             c_init,                    # Current SOS values
-            mean_values,                    # Mean ToF per receiver
-            std_values,                     # Std ToF per receiver
-            role_values,                    # Role encoding
+            mean_values / 1000,        # Mean ToF per receiver
+            std_values / 1000,         # Std ToF per receiver
+            role_values,               # Role encoding
+            coords_normalized[:, 0]  / 128,   # x pos values normalized [0,1]
+            coords_normalized[:, 1]  / 128   # Y pos values normalized [0,1]
         ], dim=-1)
 
         data = Data(
@@ -181,9 +171,10 @@ class GraphDataset:
     def _build_mesh_edges(self):
         edges = []
         mesh_start = self.num_sensor_nodes
-        mesh_positions = self.positions[mesh_start:]
+        mesh_positions = self.positions[mesh_start:]        
 
         tree = cKDTree(mesh_positions)
+
         for i in range(self.num_mesh_nodes):
             pos_i = mesh_positions[i]
             _, nbr_indices = tree.query(pos_i, k=self.mesh_node_k)
@@ -191,8 +182,17 @@ class GraphDataset:
             for nbr in nbr_indices:
                 if i == nbr:
                     continue
-                j_global = nbr + mesh_start
+                j_global = int(nbr) + mesh_start
                 edges.append((i_global, j_global))
+                edges.append((j_global, i_global))
+
+
+            for i_sensor in range(self.num_sensor_nodes):
+                if i_sensor < self.num_source_nodes:
+                    edges.append((i_sensor, i_global))
+                else:
+                    edges.append((i_global,i_sensor))
+
 
         return np.array(edges, dtype=np.int64)
 

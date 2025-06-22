@@ -45,6 +45,7 @@ class AcousticEnv:
         self.selected_sources = list(config.get("selected_sources", range(len(self.sources_positions))))
 
 
+
         # Accuracy thresholds
         self.receiver_accuracy_threshold = receiver_accuracy_threshold
         self.receiver_tof_threshold = receiver_tof_threshold
@@ -65,7 +66,7 @@ class AcousticEnv:
         self.c_map = torch.full((self.total_nodes,), self.c_init, device=self.device)
 
         # solver
-        self.solver = WaveSolver(num_iterations=20)
+        self.solver = WaveSolver()
 
     # -------------------------------------------------------------
     def reset(self):
@@ -87,7 +88,7 @@ class AcousticEnv:
         """Update the full 128x128 mesh with agent actions based on mesh node positions."""
         mesh_start = self.num_source_nodes + self.num_receiver_nodes
         mesh_positions = self.graph_dataset.positions[mesh_start:]
-        
+        print(f"mesh actions : shape {mesh_actions.shape} min/max: {mesh_actions.min()} {mesh_actions.max()}")
         # Update c_map with mesh actions
         self.c_map = self.c_map.clone()
         self.c_map[self.num_source_nodes + self.num_receiver_nodes:] += mesh_actions
@@ -95,17 +96,12 @@ class AcousticEnv:
         # Create a new full mesh tensor
         new_full_mesh = self.full_mesh.clone()
         
-        # Update mesh with agent actions using scatter
-        indices = torch.tensor([[int(y), int(x)] for x, y in mesh_positions], device=self.device)
-        values = self.c_map[mesh_start:mesh_start + self.num_mesh_nodes]
-        
-        # Reshape indices and values for scatter
-        indices = indices.t()  # Transpose to [2, num_points]
-        #values = values.unsqueeze(0)  # Add batch dimension [1, num_points]
-        
-        # Use scatter_ to update values
-        new_full_mesh.scatter_(0, indices, values)
-        
+        # Update mesh with agent actions
+        for i, (x, y) in enumerate(mesh_positions):
+            x_idx = int(x)
+            y_idx = int(y)
+            if 0 <= x_idx < new_full_mesh.shape[1] and 0 <= y_idx < new_full_mesh.shape[0]:
+                new_full_mesh[y_idx, x_idx] = self.c_map[mesh_start + i]
         # Update the full mesh
         self.full_mesh = new_full_mesh
 
@@ -163,14 +159,16 @@ class AcousticEnv:
         source_pos = self.sources_positions[src_id]
         receiver_positions = self.receivers_positions
 
-        # Ensure full_mesh has gradients
-        self.full_mesh.requires_grad_(True)
+        # Debug prints
+        print(f"full_mesh shape: {self.full_mesh.shape}")
+        print(f"full_mesh min/max values: {self.full_mesh.min()}, {self.full_mesh.max()}")
+        print(f"full_mesh device: {self.full_mesh.device}")
 
-        # Simulate T on full mesh - ensure solver returns tensor with grads
-        T_grid = self.solver.simulate_T(self.full_mesh, source_pos)
-        if not isinstance(T_grid, torch.Tensor):
-            T_grid = torch.tensor(T_grid, device=self.device, requires_grad=True)
-        
+        # Ensure full_mesh has gradients and create a new tensor to avoid modifying the original
+        full_mesh = self.full_mesh.clone().detach().requires_grad_(True)
+
+        # Simulate T on full mesh
+        T_grid = self.solver.simulate_T(full_mesh, source_pos)
         T_receivers = self._extract_receiver_values(T_grid, receiver_positions)
 
         # Compute reward using accuracy-based metric
@@ -186,17 +184,19 @@ class AcousticEnv:
         print(self.tof_matrix[src_id])
 
         T = T_grid  # Time of flight values
-        c = self.full_mesh  # Speed of sound values
+        c = full_mesh  # Speed of sound values
         physics_loss = self._compute_physics_loss(T, c)
 
         criterion = nn.MSELoss()
         boundary_loss = criterion(T_receivers, self.tof_matrix[src_id])
 
-        mse_loss = criterion(c, self.sos_matrix)
+        c_mse_loss = criterion(c, self.sos_matrix)
+        t_mse_loss = criterion(T_receivers, self.tof_matrix[src_id])
         return {
             "source": src_id,
             "boundary_loss": boundary_loss,
-            "mse_loss": mse_loss,
+            "c_mse_loss": c_mse_loss,
+            "t_mse_loss": t_mse_loss,
             "reward": reward,
             "source_done": source_done,
             "pde_loss": physics_loss
@@ -219,7 +219,8 @@ class AcousticEnv:
         # Run wave simulation for all selected sources
         total_accuracy_rewards = 0.0
         total_pde_loss = 0.0
-        total_mse_loss = 0.0
+        total_c_mse_loss = 0.0
+        total_t_mse_loss = 0.0
         all_observations = []
         all_infos = []
         done_sources = 0
@@ -233,13 +234,14 @@ class AcousticEnv:
             print(f"reward: {info['reward']}")
             total_accuracy_rewards += info['reward']
             total_pde_loss += info['pde_loss']
-            total_mse_loss += info['mse_loss']
+            total_c_mse_loss += info['c_mse_loss']
+            total_t_mse_loss += info['t_mse_loss']
             total_accuracy_rewards += info['reward']
             all_infos.append(info)
             checked_sources+=1
-            if info['reward'] < 0.5:
-                print(f"reward is too low - break")
-                break
+            #if info['reward'] < 0.5:
+            #    print(f"reward is too low - break")
+            #    break
 
             if info['source_done']:
                 done_sources += 1
@@ -247,7 +249,8 @@ class AcousticEnv:
         # Compute average reward across all sources
         avg_reward = -total_accuracy_rewards / checked_sources
         avg_pde_loss = total_pde_loss / checked_sources
-        avg_mse_loss = total_mse_loss / checked_sources
+        avg_c_mse_loss = total_c_mse_loss / checked_sources
+        avg_t_mse_loss = total_t_mse_loss / checked_sources
 
         # Check if enough sources are done
         sources_done_ratio = done_sources / len(self.selected_sources)
@@ -262,7 +265,8 @@ class AcousticEnv:
             "checked_sources": checked_sources,
             "avg_reward": avg_reward,
             "avg_pde_loss": avg_pde_loss,
-            "avg_mse_loss": avg_mse_loss
+            "avg_c_mse_loss": avg_c_mse_loss,
+            "avg_t_mse_loss": avg_t_mse_loss
         }
         return observation, total_accuracy_rewards, mission_done, info
 

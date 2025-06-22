@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 from typing import List, Tuple
 from .constants import PHYSICS_LOSS_WEIGHT, EIKONAL_TOLERANCE
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 class RolloutBuffer:
@@ -114,7 +115,7 @@ class RLAgent:
     def update_policy(self, next_observation):
         """Run PPO update using the collected rollout buffer."""
         with torch.no_grad():
-            _, next_value = self.policy(next_observation)
+            next_value = self.policy(next_observation)
         returns, advantages = self._compute_returns_and_advantages(next_value)
 
         # flatten stored tensors
@@ -180,16 +181,25 @@ class RLAgent:
 
     def train(self, max_steps):
         optimizer = optim.Adam(self.policy.parameters(), lr=1e-4)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
         reward_history = []
         obs = self.env.reset().to(self.device)
 
         episode_reward = 0.0
         episode_length = 0
 
-        r_weight = 1
-        p_weight = 1e-6  # Small weight for PDE loss
-        m_weight = 1e-6  # Small weight for MSE loss
+        r_weight = 0
+        p_weight = 0
+        mc_weight = 0
+        mt_weight = 1e-5  # Increased from 1e-6 to 1.0
+        
+        # Initialize running statistics for normalization
+        running_mean = torch.zeros(1, device=self.device)
+        running_std = torch.ones(1, device=self.device)
+        momentum = 0.99
+
         for step in range(max_steps):
+            print(f"---- step {step}")
             # Get action (ΔSoS) from policy
             action = self.select_action(obs)
             
@@ -199,15 +209,28 @@ class RLAgent:
             # Get losses from environment
             r_loss = info['avg_reward']  # Reward-based loss
             p_loss = info['avg_pde_loss']  # Physics (Eikonal) loss
-            m_loss = info['avg_mse_loss']  # SoS prediction loss
+            c_loss = info['avg_c_mse_loss']  # SoS prediction loss
+            t_loss = info['avg_t_mse_loss']  # TOF prediction loss
+
+
+
 
             # Combine losses to guide policy
-            loss = r_weight * r_loss + p_weight * p_loss + m_weight * m_loss
+            loss = r_weight * r_loss + p_weight * p_loss + mc_weight * c_loss + mt_weight * t_loss
+            print(f"---- loss {r_loss} {p_loss} {c_loss} {t_loss} ")
+            print(f"---- loss {loss} ")
             
             # Backpropagate to improve policy's actions
             optimizer.zero_grad()
             loss.backward()
+            
+            # Gradient clipping for all parameters
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
+            
             optimizer.step()
+
+            # Update learning rate based on loss
+            scheduler.step(loss)
 
             # Store transition for PPO update
             self.store_reward(reward, done)

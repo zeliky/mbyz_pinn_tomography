@@ -8,8 +8,8 @@ from logger import visualize_matdata
 
 class WaveSolver:
 
-    def __init__(self, num_iterations=5):
-        self.num_iterations = num_iterations
+    def __init__(self):
+        pass
 
     def simulate_T(self, F, source_pos):
         """
@@ -28,24 +28,11 @@ class WaveSolver:
         # Run msfm2d on the full mesh
         T_grid = msfm2d(F.detach().cpu().numpy(), source_grid)
         visualize_matdata(T_grid, 'T map')
+        visualize_matdata(F.detach().cpu().numpy(), 'C map')
 
         # Convert back to tensor and maintain gradients
         T_tensor = torch.tensor(T_grid, dtype=torch.float32, device=F.device)
-        
-        # Create a differentiable version of T_grid
-        T_diff = T_tensor.clone().detach().requires_grad_(True)
-        
-        # Compute gradients through interpolation
-        dx, dy = torch.gradient(T_diff, spacing=(1.0, 1.0))
-        grad_mag = torch.sqrt(dx ** 2 + dy ** 2 + 1e-6)
-        
-        # Eikonal equation: |∇T| = 1/c
-        eikonal_residual = (grad_mag - 1.0 / F).pow(2).mean()
-        
-        # Add gradient information
-        T_diff.register_hook(lambda grad: grad * (1.0 + eikonal_residual))
-        
-        return T_diff
+        return T_tensor
 
     def BAK_simulate_T(self, data: Data, src_id):
         """
