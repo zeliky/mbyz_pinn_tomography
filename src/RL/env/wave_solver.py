@@ -27,8 +27,8 @@ class WaveSolver:
 
         # Run msfm2d on the full mesh
         T_grid = msfm2d(F.detach().cpu().numpy(), source_grid)
-        visualize_matdata(T_grid, 'T map')
-        visualize_matdata(F.detach().cpu().numpy(), 'C map')
+        #visualize_matdata(T_grid, 'T map')
+        #visualize_matdata(F.detach().cpu().numpy(), 'C map')
 
         # Convert back to tensor and maintain gradients
         T_tensor = torch.tensor(T_grid, dtype=torch.float32, device=F.device)

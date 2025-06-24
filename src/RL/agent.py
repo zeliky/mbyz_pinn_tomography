@@ -96,13 +96,14 @@ class RLAgent:
             delta = (
                 self.buffer.rewards[step]
                 + self.gamma * next_val * mask
-                - self.buffer.values[step]
+                #- self.buffer.values[step]
             )
             gae = delta + self.gamma * self.gae_lambda * mask * gae
             advantages.insert(0, gae)
-            next_val = self.buffer.values[step]
-            returns.insert(0, gae + self.buffer.values[step])
-        
+            #next_val = self.buffer.values[step]
+            #returns.insert(0, gae + self.buffer.values[step])
+            returns.insert(0, gae )
+
         advantages = torch.tensor(advantages, dtype=torch.float32, device=self.device)
         returns = torch.tensor(returns, dtype=torch.float32, device=self.device)
         
@@ -121,7 +122,7 @@ class RLAgent:
         # flatten stored tensors
         old_actions = torch.stack(self.buffer.actions).to(self.device)
         old_logprobs = torch.stack(self.buffer.logprobs).to(self.device)
-        old_values = torch.stack(self.buffer.values).to(self.device)
+        #old_values = torch.stack(self.buffer.values).to(self.device)
 
         dataset = list(zip(self.buffer.observations, old_actions, old_logprobs, returns, advantages))
         
@@ -189,9 +190,9 @@ class RLAgent:
         episode_length = 0
 
         r_weight = 0
-        p_weight = 0
-        mc_weight = 0
-        mt_weight = 1e-5  # Increased from 1e-6 to 1.0
+        p_weight = 1
+        mc_weight = 1
+        mt_weight = 1e-6  # Increased from 1e-6 to 1.0
         
         # Initialize running statistics for normalization
         running_mean = torch.zeros(1, device=self.device)

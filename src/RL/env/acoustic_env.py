@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch_geometric.data import Data
 from logger import visualize_matdata
 from .wave_solver import WaveSolver   # assumes the WaveSolver text‑doc is saved as wave_solver.py on disk
-
+from tqdm import tqdm
 
 class AcousticEnv:
     """Environment wrapper that interacts with RLAgent.
@@ -89,21 +89,27 @@ class AcousticEnv:
         mesh_start = self.num_source_nodes + self.num_receiver_nodes
         mesh_positions = self.graph_dataset.positions[mesh_start:]
         print(f"mesh actions : shape {mesh_actions.shape} min/max: {mesh_actions.min()} {mesh_actions.max()}")
-        # Update c_map with mesh actions
-        self.c_map = self.c_map.clone()
-        self.c_map[self.num_source_nodes + self.num_receiver_nodes:] += mesh_actions
 
+        self.c_map[self.num_source_nodes + self.num_receiver_nodes:] += mesh_actions
+        xr = self.graph_dataset.x_range
+        yr = self.graph_dataset.y_range
+        self.full_mesh[xr[0]:xr[1], yr[0]:yr[1]] = self.c_map[self.num_source_nodes + self.num_receiver_nodes:].view(xr[1]-xr[0], yr[1]-yr[0])
+
+
+
+        """
         # Create a new full mesh tensor
         new_full_mesh = self.full_mesh.clone()
         
         # Update mesh with agent actions
         for i, (x, y) in enumerate(mesh_positions):
-            x_idx = int(x)
-            y_idx = int(y)
+            x_idx = int(round(x))
+            y_idx = int(round(y))
             if 0 <= x_idx < new_full_mesh.shape[1] and 0 <= y_idx < new_full_mesh.shape[0]:
                 new_full_mesh[y_idx, x_idx] = self.c_map[mesh_start + i]
         # Update the full mesh
         self.full_mesh = new_full_mesh
+        """
 
     def _check_source_done(self, T_receivers, target_tof):
         """
@@ -137,32 +143,16 @@ class AcousticEnv:
             T_receivers.append(T_grid[y_idx, x_idx])
         return torch.tensor(T_receivers, dtype=torch.float32, device=T_grid.device)
 
-    def _extract_mesh_values(self, T_grid, mesh_positions):
-        """
-        Extract time-of-flight values for receiver positions from the full T grid.
 
-        Args:
-            T_grid: 2D tensor of time-of-flight values for the entire mesh
-            mesh_positions: Array of receiver positions (x, y)
-
-        Returns:
-            T_mesh: Tensor of time-of-flight values for mesh nodes
-        """
-        T_mesh = []
-        for x, y in mesh_positions:
-            x_idx = int(x)
-            y_idx = int(y)
-            T_mesh.append(T_grid[y_idx, x_idx])
-        return torch.tensor(T_mesh, dtype=torch.float32, device=T_grid.device)
 
     def _run_wave_simulation(self, src_id):
         source_pos = self.sources_positions[src_id]
         receiver_positions = self.receivers_positions
 
         # Debug prints
-        print(f"full_mesh shape: {self.full_mesh.shape}")
-        print(f"full_mesh min/max values: {self.full_mesh.min()}, {self.full_mesh.max()}")
-        print(f"full_mesh device: {self.full_mesh.device}")
+        #print(f"full_mesh shape: {self.full_mesh.shape}")
+        #print(f"full_mesh min/max values: {self.full_mesh.min()}, {self.full_mesh.max()}")
+        #print(f"full_mesh device: {self.full_mesh.device}")
 
         # Ensure full_mesh has gradients and create a new tensor to avoid modifying the original
         full_mesh = self.full_mesh.clone().detach().requires_grad_(True)
@@ -177,11 +167,11 @@ class AcousticEnv:
         # Check if this source is done
         source_done = self._check_source_done(T_receivers, self.tof_matrix[src_id])
 
-        print(f"source ID: {src_id}")
-        print(f"simulated TOF values:")
-        print(T_receivers)
-        print(f"real values:")
-        print(self.tof_matrix[src_id])
+        #print(f"source ID: {src_id}")
+        #print(f"simulated TOF values:")
+        #print(T_receivers)
+        #print(f"real values:")
+        #print(self.tof_matrix[src_id])
 
         T = T_grid  # Time of flight values
         c = full_mesh  # Speed of sound values
@@ -199,7 +189,8 @@ class AcousticEnv:
             "t_mse_loss": t_mse_loss,
             "reward": reward,
             "source_done": source_done,
-            "pde_loss": physics_loss
+            "pde_loss": physics_loss,
+            "t_grid": T_grid
         }
 
 
@@ -224,27 +215,56 @@ class AcousticEnv:
         all_observations = []
         all_infos = []
         done_sources = 0
-
-        self.observation.x[:, 0] = self.c_map
-        all_observations.append(self.observation)
-
         checked_sources = 0
-        for src_id in self.selected_sources:
-            info = self._run_wave_simulation(src_id)
-            print(f"reward: {info['reward']}")
-            total_accuracy_rewards += info['reward']
-            total_pde_loss += info['pde_loss']
-            total_c_mse_loss += info['c_mse_loss']
-            total_t_mse_loss += info['t_mse_loss']
-            total_accuracy_rewards += info['reward']
-            all_infos.append(info)
-            checked_sources+=1
-            #if info['reward'] < 0.5:
-            #    print(f"reward is too low - break")
-            #    break
+        t_grids = []
+        with tqdm(total=len(self.selected_sources)) as pbar:
+            pbar.set_description("simulating wave propagation with c_map")
+            for src_id in self.selected_sources:
+                #print(f"checking src {src_id}")
+                pbar.update(1)
+                info = self._run_wave_simulation(src_id)
+                t_grids.append(info["t_grid"].detach().cpu())  # (H, W)
+                #print(f"reward: {info['reward']}")
+                total_accuracy_rewards += info['reward']
+                total_pde_loss += info['pde_loss']
+                total_c_mse_loss += info['c_mse_loss']
+                total_t_mse_loss += info['t_mse_loss']
+                total_accuracy_rewards += info['reward']
+                all_infos.append(info)
+                checked_sources+=1
+                #if info['reward'] < 0.5:
+                #    print(f"reward is too low - break")
+                #    break
 
-            if info['source_done']:
-                done_sources += 1
+                if info['source_done']:
+                    done_sources += 1
+
+        # Stack t_grids: shape (num_sources, H, W)
+        t_grids = torch.stack(t_grids, dim=0)  # (num_sources, H, W)
+        t_mean = t_grids.mean(dim=0)           # (H, W)
+        t_std = t_grids.std(dim=0)             # (H, W)
+        #print(f"t_mean min/max values: {t_mean.min()}, {t_mean.max()}")
+        #print(f"t_std min/max values: {t_std.min()}, {t_std.max()}")
+
+        # Now, map these mean/std values to the graph nodes
+        # You need to know the (x, y) position of each node in the graph
+        # Let's assume you have node positions in self.graph_dataset.positions (shape: [num_nodes, 2])
+        node_positions = self.graph_dataset.positions  # shape: (num_nodes, 2)
+        node_mean = []
+        node_std = []
+        for x, y in node_positions:
+            x_idx = int(x)
+            y_idx = int(y)
+            node_mean.append(t_mean[y_idx, x_idx])
+            node_std.append(t_std[y_idx, x_idx])
+        node_mean = torch.tensor(node_mean, device=self.device, dtype=torch.float32)
+        node_std = torch.tensor(node_std, device=self.device, dtype=torch.float32)
+
+        # Inject into observation
+        self.observation.x[:, 0] = self.c_map
+        self.observation.x[:, 1] = node_mean /1000
+        self.observation.x[:, 2] = node_std /1000
+        all_observations.append(self.observation)
 
         # Compute average reward across all sources
         avg_reward = -total_accuracy_rewards / checked_sources

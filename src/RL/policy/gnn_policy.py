@@ -32,19 +32,21 @@ class GNNPolicy(nn.Module):
 
     # ------------------------------------------------------------------
     def forward(self, data):
+        c = data.x[:, 0].clone()
+
         x, edge_index = data.x, data.edge_index
-        x = F.relu(self.gat1(x, edge_index))
-        x = F.relu(self.gat2(x, edge_index))
+        x = torch.relu(self.gat1(x, edge_index))
+        x = torch.relu(self.gat2(x, edge_index))
        
         #x = F.relu(self.gat3(x, edge_index))
         #x = F.relu(self.gat4(x, edge_index))
 
-        delta_c = self.out(x, edge_index).squeeze(-1)  
+        delta_c = self.out(x, edge_index).squeeze()
              
-        delta_c = torch.tanh(delta_c)      # [N]   
+        delta_c = torch.tanh(delta_c)      # [N]
 
         # ensure delta c will not exceed valid speed of sound [0.04, 2.7]
-        c = data.x[:, 0]
+
         max_up = 2.8 - c
 
         max_down = c - 0.01
@@ -55,6 +57,7 @@ class GNNPolicy(nn.Module):
         delta_c = delta_c * mesh_mask.float()
         #print(f"delta_c min/max values: {delta_c.tolist()}")
         return delta_c
+
 
     # -------------------------------------------------------------
     # Helper to map sampled indices → actual c values  (optional)
