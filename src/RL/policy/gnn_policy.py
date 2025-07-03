@@ -32,7 +32,7 @@ class GNNPolicy(nn.Module):
 
     # ------------------------------------------------------------------
     def forward(self, data):
-        c = data.x[:, 0].clone()
+        c_base = data.x[:, 0].clone()
 
         x, edge_index = data.x, data.edge_index
         x = torch.relu(self.gat1(x, edge_index))
@@ -43,20 +43,9 @@ class GNNPolicy(nn.Module):
 
         delta_c = self.out(x, edge_index).squeeze()
              
-        delta_c = torch.tanh(delta_c)      # [N]
-
-        # ensure delta c will not exceed valid speed of sound [0.04, 2.7]
-
-        max_up = 2.8 - c
-
-        max_down = c - 0.01
-        dynamic_max = torch.where(delta_c >= 0, max_up, max_down)
-        delta_c = delta_c * dynamic_max
-        
-        mesh_mask = (data.x[:, 3] == 1)
-        delta_c = delta_c * mesh_mask.float()
-        #print(f"delta_c min/max values: {delta_c.tolist()}")
-        return delta_c
+        # delta_c = torch.tanh(delta_c)      # [N]
+        c_pred = torch.softplus(c_base + delta_c)  # make sure that after change C will be positive
+        return c_pred-c_base
 
 
     # -------------------------------------------------------------
