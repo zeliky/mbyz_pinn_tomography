@@ -66,13 +66,16 @@ class RLAgent:
 
     def select_action(self, observation):
         """Run policy → sample action → store transition in buffer."""
-        # policy must internally handle PyG Data object
         with torch.no_grad():
-            action = self.policy(observation)
-        # store
+            action_dist, value = self.policy(observation)
+            action = action_dist.sample()
+            logprob = action_dist.log_prob(action).sum(dim=-1)
+        
+        # Store complete transition data for PPO
         self.buffer.observations.append(observation)
         self.buffer.actions.append(action)
-
+        self.buffer.logprobs.append(logprob)
+        self.buffer.values.append(value)
 
         return action.cpu().numpy()  # env may expect numpy
 
@@ -91,40 +94,38 @@ class RLAgent:
         advantages = []
         gae = 0.0
         next_val = next_value
+        
         for step in reversed(range(len(self.buffer.rewards))):
             mask = 1.0 - float(self.buffer.dones[step])
             delta = (
                 self.buffer.rewards[step]
                 + self.gamma * next_val * mask
-                #- self.buffer.values[step]
+                - self.buffer.values[step]
             )
             gae = delta + self.gamma * self.gae_lambda * mask * gae
             advantages.insert(0, gae)
-            #next_val = self.buffer.values[step]
-            #returns.insert(0, gae + self.buffer.values[step])
-            returns.insert(0, gae )
+            next_val = self.buffer.values[step]
+            returns.insert(0, gae + self.buffer.values[step])
 
         advantages = torch.tensor(advantages, dtype=torch.float32, device=self.device)
         returns = torch.tensor(returns, dtype=torch.float32, device=self.device)
         
-        # Add value function baseline subtraction
-        advantages = advantages - advantages.mean()
         # Normalize advantages
-        advantages = advantages / (advantages.std() + 1e-8)
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         return returns, advantages
 
-    def update_policy(self, next_observation):
+    def update_policy(self, next_observation, physics_losses=None):
         """Run PPO update using the collected rollout buffer."""
         with torch.no_grad():
-            next_value = self.policy(next_observation)
+            _, next_value = self.policy(next_observation)
         returns, advantages = self._compute_returns_and_advantages(next_value)
 
         # flatten stored tensors
         old_actions = torch.stack(self.buffer.actions).to(self.device)
         old_logprobs = torch.stack(self.buffer.logprobs).to(self.device)
-        #old_values = torch.stack(self.buffer.values).to(self.device)
+        old_values = torch.stack(self.buffer.values).to(self.device)
 
-        dataset = list(zip(self.buffer.observations, old_actions, old_logprobs, returns, advantages))
+        dataset = list(zip(self.buffer.observations, old_actions, old_logprobs, old_values, returns, advantages))
         
         # Add early stopping
         best_loss = float('inf')
@@ -133,26 +134,43 @@ class RLAgent:
 
         for epoch in range(self.update_epochs):
             epoch_loss = 0.0
-            for obs, act, old_lp, ret, adv in dataset:
-                dist, value = self.policy(obs)
-                logprob = dist.log_prob(act).sum(dim=-1)
-                entropy = dist.entropy().sum(dim=-1)
+            for obs, act, old_lp, old_val, ret, adv in dataset:
+                action_dist, value = self.policy(obs)
+                logprob = action_dist.log_prob(act).sum(dim=-1)
+                entropy = action_dist.entropy().sum(dim=-1)
 
+                # PPO clipped policy loss
                 ratio = torch.exp(logprob - old_lp.detach())
                 surr1 = ratio * adv
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv
                 policy_loss = -torch.min(surr1, surr2).mean()
 
-                value_loss = F.mse_loss(value.squeeze(-1), ret)
+                # Value function loss
+                value_loss = F.mse_loss(value.squeeze(), ret)
+                
+                # Entropy bonus
                 entropy_loss = -entropy.mean()
 
-                # Compute physics loss
-                T = obs.x[:, 0]  # Time of flight values
-                c = obs.x[:, 1]  # Speed of sound values
-                pos = obs.pos    # Node positions
-                physics_loss = self.compute_physics_loss(T, c, pos)
+                # Physics-informed loss component
+                physics_loss = torch.tensor(0.0, device=self.device)
+                if physics_losses is not None:
+                    # Incorporate PINN losses into policy training
+                    pde_loss = physics_losses.get('avg_pde_loss', 0.0)
+                    c_mse_loss = physics_losses.get('avg_c_mse_loss', 0.0) 
+                    t_mse_loss = physics_losses.get('avg_t_mse_loss', 0.0)
+                    
+                    # Convert to tensors if they aren't already
+                    if not isinstance(pde_loss, torch.Tensor):
+                        pde_loss = torch.tensor(pde_loss, device=self.device)
+                    if not isinstance(c_mse_loss, torch.Tensor):
+                        c_mse_loss = torch.tensor(c_mse_loss, device=self.device)
+                    if not isinstance(t_mse_loss, torch.Tensor):
+                        t_mse_loss = torch.tensor(t_mse_loss, device=self.device)
+                    
+                    # Weighted combination of physics losses
+                    physics_loss = (pde_loss + c_mse_loss + t_mse_loss)
 
-                # Combine losses with physics weight
+                # Combined PPO + Physics loss
                 loss = (policy_loss + 
                        self.value_coef * value_loss + 
                        self.entropy_coef * entropy_loss +
@@ -180,70 +198,84 @@ class RLAgent:
     # Training Loop ----------------------------------------------------
     # ------------------------------------------------------------------
 
-    def train(self, max_steps):
-        optimizer = optim.Adam(self.policy.parameters(), lr=1e-4)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+    def train(self, max_steps, rollout_length=10):
+        """
+        Physics-informed PPO training loop that incorporates PINN losses.
+        
+        Args:
+            max_steps: Total number of environment steps
+            rollout_length: Number of steps per rollout before PPO update
+        """
         reward_history = []
         obs = self.env.reset().to(self.device)
-
-        episode_reward = 0.0
-        episode_length = 0
-
-        r_weight = 0
-        p_weight = 1
-        mc_weight = 1
-        mt_weight = 1e-6  # Increased from 1e-6 to 1.0
         
-        # Initialize running statistics for normalization
-        running_mean = torch.zeros(1, device=self.device)
-        running_std = torch.ones(1, device=self.device)
-        momentum = 0.99
-
-        for step in range(max_steps):
-            print(f"---- step {step}")
-            # Get action (ΔSoS) from policy
-            action = self.select_action(obs)
+        episode_reward = 0.0
+        step_count = 0
+        latest_physics_losses = None
+        
+        print(f"Starting Physics-Informed PPO training for {max_steps} steps...")
+        
+        while step_count < max_steps:
+            # Collect rollout
+            rollout_physics_losses = []
+            for rollout_step in range(rollout_length):
+                if step_count >= max_steps:
+                    break
+                    
+                print(f"---- Step {step_count}/{max_steps}")
+                
+                # Get action from policy
+                action = self.select_action(obs)
+                
+                # Step environment
+                next_obs, reward, done, info = self.env.step(action)
+                
+                # Store reward and done flag
+                self.store_reward(reward, done)
+                episode_reward += reward
+                step_count += 1
+                
+                # Collect physics losses for PPO update
+                physics_losses = {
+                    'avg_pde_loss': info.get('avg_pde_loss', 0.0),
+                    'avg_c_mse_loss': info.get('avg_c_mse_loss', 0.0),
+                    'avg_t_mse_loss': info.get('avg_t_mse_loss', 0.0)
+                }
+                rollout_physics_losses.append(physics_losses)
+                latest_physics_losses = physics_losses
+                
+                # Log physics metrics from environment
+                if step_count % 5 == 0:
+                    print(f"Physics metrics - PDE: {physics_losses['avg_pde_loss']:.6f}, "
+                          f"C MSE: {physics_losses['avg_c_mse_loss']:.6f}, "
+                          f"T MSE: {physics_losses['avg_t_mse_loss']:.6f}, "
+                          f"Reward: {reward:.4f}")
+                
+                obs = next_obs.to(self.device)
+                
+                if done:
+                    print(f"Episode finished with reward: {episode_reward:.4f}")
+                    reward_history.append(episode_reward)
+                    episode_reward = 0.0
+                    obs = self.env.reset().to(self.device)
+                    break
             
-            # Step environment - update SoS and compute physics loss
-            next_obs, reward, done, info = self.env.step(action)
-
-            # Get losses from environment
-            r_loss = info['avg_reward']  # Reward-based loss
-            p_loss = info['avg_pde_loss']  # Physics (Eikonal) loss
-            c_loss = info['avg_c_mse_loss']  # SoS prediction loss
-            t_loss = info['avg_t_mse_loss']  # TOF prediction loss
-
-
-
-
-            # Combine losses to guide policy
-            loss = r_weight * r_loss + p_weight * p_loss + mc_weight * c_loss + mt_weight * t_loss
-            print(f"---- loss {r_loss} {p_loss} {c_loss} {t_loss} ")
-            print(f"---- loss {loss} ")
-            
-            # Backpropagate to improve policy's actions
-            optimizer.zero_grad()
-            loss.backward()
-            
-            # Gradient clipping for all parameters
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=1.0)
-            
-            optimizer.step()
-
-            # Update learning rate based on loss
-            scheduler.step(loss)
-
-            # Store transition for PPO update
-            self.store_reward(reward, done)
-            episode_reward += reward
-            episode_length += 1
-            obs = next_obs.to(self.device)
-
-            if done:
-                self.update_policy(obs)
-                reward_history.append(episode_reward)
-                episode_reward = 0.0
-                episode_length = 0
-                obs = self.env.reset().to(self.device)
+            # PPO update after rollout with physics losses
+            if len(self.buffer.observations) > 0:
+                # Average physics losses over the rollout
+                if rollout_physics_losses:
+                    avg_physics_losses = {
+                        'avg_pde_loss': sum(p['avg_pde_loss'] for p in rollout_physics_losses) / len(rollout_physics_losses),
+                        'avg_c_mse_loss': sum(p['avg_c_mse_loss'] for p in rollout_physics_losses) / len(rollout_physics_losses),
+                        'avg_t_mse_loss': sum(p['avg_t_mse_loss'] for p in rollout_physics_losses) / len(rollout_physics_losses)
+                    }
+                    print(f"PPO update with physics losses - PDE: {avg_physics_losses['avg_pde_loss']:.6f}, "
+                          f"C MSE: {avg_physics_losses['avg_c_mse_loss']:.6f}, "
+                          f"T MSE: {avg_physics_losses['avg_t_mse_loss']:.6f}")
+                else:
+                    avg_physics_losses = latest_physics_losses
+                
+                print(f"Performing Physics-Informed PPO update with {len(self.buffer.observations)} transitions")
+                self.update_policy(obs, physics_losses=avg_physics_losses)
         
         return reward_history

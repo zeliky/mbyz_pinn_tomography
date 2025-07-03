@@ -24,7 +24,7 @@ class GraphDataset:
         # S/R counts
         self.num_source_nodes = kwargs.get('num_source_nodes', 32)
         self.num_receiver_nodes = kwargs.get('num_receiver_nodes', 32)
-        self.num_mesh_nodes = int((self.x_range[1]-self.x_range[0])/self.nx * (self.y_range[1]-self.y_range[0])/self.ny)
+        self.num_mesh_nodes = int((self.x_range[1]-self.x_range[0]) * (self.y_range[1]-self.y_range[0]))
         self.num_sensor_nodes = self.num_source_nodes + self.num_receiver_nodes
 
         # Graph storage
@@ -132,9 +132,9 @@ class GraphDataset:
         mean_values[receiver_start:receiver_end] = tof_mean
         std_values[receiver_start:receiver_end] = tof_std
         
-        role_values[0:receiver_start] = 0 # Source role
-        role_values[receiver_start:receiver_end] = 0  # Receiver role
-        role_values[receiver_end:] = 1  # Mesh role
+        role_values[0:receiver_start] = 1  # Source role
+        role_values[receiver_start:receiver_end] = 2  # Receiver role
+        role_values[receiver_end:] = 3  # Mesh role
 
         # Stack all features
         x = torch.stack([
@@ -142,8 +142,8 @@ class GraphDataset:
             mean_values / 1000,        # Mean ToF per receiver
             std_values / 1000,         # Std ToF per receiver
             role_values,               # Role encoding
-            coords_normalized[:, 0]  / 128,   # x pos values normalized [0,1]
-            coords_normalized[:, 1]  / 128   # Y pos values normalized [0,1]
+            coords_normalized[:, 0],   # x pos values normalized [0,1]
+            coords_normalized[:, 1]    # Y pos values normalized [0,1]
         ], dim=-1)
 
         data = Data(
@@ -177,8 +177,11 @@ class GraphDataset:
 
         for i in range(self.num_mesh_nodes):
             pos_i = mesh_positions[i]
-            _, nbr_indices = tree.query(pos_i, k=self.mesh_node_k)
+            # Connect to 9 nearest neighbors (including self, so we get 8 neighbors + self)
+            _, nbr_indices = tree.query(pos_i, k=min(9, self.num_mesh_nodes))
             i_global = i + mesh_start
+            
+            # Add mesh-to-mesh edges (9 nearest neighbors)
             for nbr in nbr_indices:
                 if i == nbr:
                     continue
@@ -186,13 +189,10 @@ class GraphDataset:
                 edges.append((i_global, j_global))
                 edges.append((j_global, i_global))
 
-
+            # Connect each mesh node to ALL sources and receivers
             for i_sensor in range(self.num_sensor_nodes):
-                if i_sensor < self.num_source_nodes:
-                    edges.append((i_sensor, i_global))
-                else:
-                    edges.append((i_global,i_sensor))
-
+                edges.append((i_sensor, i_global))  # sensor -> mesh
+                edges.append((i_global, i_sensor))  # mesh -> sensor
 
         return np.array(edges, dtype=np.int64)
 
@@ -217,4 +217,3 @@ class GraphDataset:
                 edges.append((j_global, s_idx_global))  # in
 
         return np.array(edges, dtype=np.int64)
-

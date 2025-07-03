@@ -10,6 +10,7 @@ from logger import log_message, log_image
 from settings import  app_settings
 import random
 import math
+from models.tof_to_sos_net import normalize_tof, denormalize_tof, normalize_sos, denormalize_sos
 
 
 class BaseTrainingStep:
@@ -148,6 +149,21 @@ class RLAgetTrainingStep(BaseTrainingStep):
         if not self.gd.initialized:
             self.gd.build(sources_positions, receivers_positions)
 
+
+    def inference_with_refinement(policy, tof_measurements, max_steps=50, tof_threshold=1e-6):
+        for step in range(max_steps):
+            action = policy(current_state)
+            new_state = apply_action(action)
+            
+            # Check TOF matching
+            predicted_tof = forward_simulate(new_state.sos_map)
+            tof_error = mse(predicted_tof, tof_measurements)
+            
+            if tof_error < tof_threshold:
+                break  # Converged!
+                
+        return new_state.sos_map, step, tof_error
+        
 class DualHeadGATTrainingStep(BaseTrainingStep):
     def __init__(self,estimator, ** kwargs):
         super().__init__()
@@ -704,6 +720,154 @@ def _compute_laplacian_loss(c_pred, X, Y):
     T_yy = torch.autograd.grad(c_pred.sum(), Y, create_graph=True)[0]
     laplacian_loss = torch.mean(T_xx ** 2 + T_yy ** 2)
     return laplacian_loss
+
+
+class TOFToSOSTrainingStep(BaseTrainingStep):
+    """
+    Training step handler for TOF-to-SOS super-resolution network.
+    Converts 32x32 TOF matrix to 128x128 SOS map.
+    """
+    
+    def __init__(self, use_physics_loss=False, tof_range=(700, 900), sos_range=(0.8, 2.1)):
+        super().__init__()
+        self.use_physics_loss = use_physics_loss
+        self.tof_min, self.tof_max = tof_range
+        self.sos_min, self.sos_max = sos_range
+        
+        # Initialize differentiable solver for physics-informed training
+        if self.use_physics_loss:
+            try:
+                from RL.env.differentiable_wave_solver import DifferentiableWaveSolver
+                self.wave_solver = DifferentiableWaveSolver()
+                log_message("Physics-informed training enabled with differentiable wave solver")
+            except ImportError:
+                log_message("Warning: Could not import DifferentiableWaveSolver, disabling physics loss")
+                self.use_physics_loss = False
+    
+    def perform_step(self, batch):
+        """
+        Perform one training step.
+        
+        Expected batch format:
+        - 'raw_tof': 32x32 TOF matrix with real time values
+        - 'raw_sos': 128x128 SOS map with real speed values
+        """
+        # Get data from batch
+        tof_matrix = batch['raw_tof'].float().to(self.device)  # [B, 32, 32]
+        sos_true = batch['raw_sos'].float().to(self.device)    # [B, 128, 128]
+        
+        # Ensure correct dimensions
+        if len(tof_matrix.shape) == 3:
+            tof_matrix = tof_matrix.unsqueeze(1)  # [B, 1, 32, 32]
+        if len(sos_true.shape) == 3:
+            sos_true = sos_true.unsqueeze(1)      # [B, 1, 128, 128]
+        
+        # Normalize inputs for stable training
+        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        sos_true_normalized = normalize_sos(sos_true, self.sos_min, self.sos_max)
+        
+        # Forward pass
+        sos_pred_normalized = self.model(tof_normalized)
+        
+        # Compute main reconstruction loss
+        mse_loss = self.criterion(sos_pred_normalized, sos_true_normalized)
+        
+        # Compute weighted loss for important regions (tumors, etc.)
+        w_mse_loss = self.w_criterion(sos_pred_normalized, sos_true_normalized)
+        
+        # Balance weighted loss
+        w = 0
+        if mse_loss < 0.1:
+            w = _balance_order_of_magnitude(mse_loss, w_mse_loss) / 10
+        
+        data_loss = mse_loss + w * w_mse_loss
+        
+        # Physics-informed loss (optional)
+        physics_loss = 0.0
+        if self.use_physics_loss and hasattr(self, 'wave_solver'):
+            physics_loss = self._compute_physics_loss(
+                tof_matrix, sos_pred_normalized, batch
+            )
+        
+        # Total loss
+        physics_weight = 1e-4 if self.use_physics_loss else 0.0
+        total_loss = data_loss + physics_weight * physics_loss
+        
+        log_message(
+            f"TOF->SOS Loss - Total: {total_loss:.6f}, MSE: {mse_loss:.6f}, "
+            f"Weighted: {w_mse_loss:.6f} (w={w:.4f}), Physics: {physics_loss:.6f}"
+        )
+        
+        return total_loss, data_loss, physics_loss, w_mse_loss
+    
+    def _compute_physics_loss(self, tof_measured, sos_pred_normalized, batch):
+        """
+        Compute physics-informed loss by forward simulating TOF from predicted SOS.
+        """
+        try:
+            # Denormalize SOS for physics simulation
+            sos_pred = denormalize_sos(sos_pred_normalized, self.sos_min, self.sos_max)
+            
+            # Get source/receiver positions if available
+            if 'x_s' in batch and 'x_r' in batch:
+                sources = batch['x_s'].to(self.device)
+                receivers = batch['x_r'].to(self.device)
+                
+                # Forward simulate TOF using predicted SOS
+                tof_simulated = self.wave_solver.forward_simulate(
+                    sos_pred.squeeze(), sources, receivers
+                )
+                
+                # Compare with measured TOF
+                physics_loss = self.criterion(tof_simulated, tof_measured.squeeze())
+                return physics_loss
+            else:
+                # No source/receiver positions available
+                return torch.tensor(0.0, device=self.device)
+                
+        except Exception as e:
+            log_message(f"Warning: Physics loss computation failed: {e}")
+            return torch.tensor(0.0, device=self.device)
+    
+    def eval_model(self, batch):
+        """
+        Evaluate model and return denormalized SOS prediction.
+        """
+        tof_matrix = batch['raw_tof'].float().to(self.device)
+        
+        # Ensure correct dimensions
+        if len(tof_matrix.shape) == 3:
+            tof_matrix = tof_matrix.unsqueeze(1)  # [B, 1, 32, 32]
+        
+        # Normalize input
+        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        
+        # Forward pass
+        with torch.no_grad():
+            sos_pred_normalized = self.model(tof_normalized)
+        
+        # Denormalize output
+        sos_pred = denormalize_sos(sos_pred_normalized, self.sos_min, self.sos_max)
+        
+        # Convert to numpy for compatibility with existing evaluation code
+        sos_pred_np = sos_pred.cpu().numpy()
+        
+        return sos_pred_np
+    
+    def get_model_input_data(self, batch):
+        """
+        Extract model input data from batch.
+        """
+        tof_matrix = batch['raw_tof'].float().to(self.device)
+        
+        # Ensure correct dimensions
+        if len(tof_matrix.shape) == 3:
+            tof_matrix = tof_matrix.unsqueeze(1)  # [B, 1, 32, 32]
+        
+        # Normalize input
+        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        
+        return tof_normalized
 
 
 def _balance_weights(loss_tof, loss_sos, loss_pde,loss_bc):

@@ -10,9 +10,10 @@ from models.pinn_linear import TOFtoSOSPINNLinerModel
 from models.pinn_unet import MultiSourceTOFModel
 from models.pinn_combined import CombinedSosTofModel
 from models.gat import DualHeadGATModel, SosEstimator
+from models.tof_to_sos_net import TOFToSOSSuperResNet, create_tof_to_sos_net
 from RL.policy.gnn_policy import GNNPolicy
 from training_steps_handlers import (RLAgetTrainingStep,TofToSosUNetTrainingStep, TofPredictorTrainingStep, CombinedSosTofTrainingStep,
-                                     TOFtoSOSPINNLinerTrainingStep, DualHeadGATTrainingStep)
+                                     TOFtoSOSPINNLinerTrainingStep, DualHeadGATTrainingStep, TOFToSOSTrainingStep)
 import os
 import time
 from TimeMeasurement.time_measurement import convert
@@ -116,6 +117,59 @@ def train_sos_predictor():
     log_message("[main.py] Training pipeline complete.")
 
 
+def train_tof_to_sos_super_res():
+    """
+    Train the TOF-to-SOS super-resolution network.
+    Converts 32x32 TOF matrix to 128x128 SOS map.
+    """
+    global sos_checkpoint_path
+    epochs = 50
+    
+    # Create model - you can choose 'light', 'medium', or 'heavy'
+    model = create_tof_to_sos_net(model_size='medium')
+    
+    # Print model information
+    info = model.get_model_info()
+    log_message(f"TOF-to-SOS Model Info:")
+    log_message(f"  Parameters: {info['total_parameters']:,}")
+    log_message(f"  Input size: {info['input_size']}")
+    log_message(f"  Output size: {info['output_size']}")
+    log_message(f"  Upsampling factor: {info['upsampling_factor']}x")
+    log_message(f"  Use attention: {info['use_attention']}")
+    log_message(f"  Use residual: {info['use_residual']}")
+    
+    # Create trainer
+    trainer = PINNTrainer(
+        model=model,
+        training_step_handler=TOFToSOSTrainingStep(
+            use_physics_loss=False,  # Start without physics loss
+            tof_range=(700, 900),    # Adjust based on your data
+            sos_range=(0.8, 2.1)     # Adjust based on your data
+        ),
+        batch_size=4,  # Larger batch size for stable training
+        train_dataset=TofDataset(['train']),
+        val_dataset=TofDataset(['validation']),
+        epochs=epochs,
+        lr=1e-4,  # Conservative learning rate
+        scheduler_step_size=10
+    )
+    
+    # Load checkpoint if available
+    if sos_checkpoint_path is not None:
+        trainer.load_checkpoint(sos_checkpoint_path)
+        log_message(f"Loaded checkpoint: {sos_checkpoint_path}")
+    
+    # Train the model
+    log_message("Starting TOF-to-SOS super-resolution training...")
+    trainer.train_model()
+    log_message(' ')
+
+    # Visualize training progress
+    trainer.visualize_training_and_validation()
+
+    log_message("[main.py] TOF-to-SOS super-resolution training complete.")
+
+
 
 def train_tof_predictor():
     global tof_checkpoint_path
@@ -174,5 +228,3 @@ if __name__ == "__main__":
     hours, minutes, seconds = convert(res)
     log_message(" ")
     log_message('CPU Execution time: {} hours, {} Minutes, {} seconds'.format(int(hours), int(minutes), int(seconds)))
-
-

@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch_geometric.data import Data
 from logger import visualize_matdata
 from .wave_solver import WaveSolver   # assumes the WaveSolver text‑doc is saved as wave_solver.py on disk
+from .differentiable_wave_solver import create_differentiable_wave_solver
 from tqdm import tqdm
 
 class AcousticEnv:
@@ -31,6 +32,8 @@ class AcousticEnv:
         receiver_accuracy_threshold: float = 0.8,  # 80% of receivers must be accurate
         receiver_tof_threshold: float = 0.2,      # 20% error threshold for each receiver
         source_completion_threshold: float = 0.8,  # 80% of sources must be done
+        use_differentiable_solver: bool = False,  # Enable differentiable wave solver
+        solver_optimization_level: str = 'standard',  # 'basic', 'standard', or 'optimized'
     ):
         self.device = config.get("device", "cpu")
         self.c_init = config['c_init']
@@ -65,8 +68,17 @@ class AcousticEnv:
         # speed map – initialise with middle bin (1.2)
         self.c_map = torch.full((self.total_nodes,), self.c_init, device=self.device)
 
-        # solver
-        self.solver = WaveSolver()
+        # solver configuration
+        self.use_differentiable_solver = use_differentiable_solver
+        self.solver_optimization_level = solver_optimization_level
+        
+        # Initialize solvers
+        self.solver = WaveSolver()  # Original non-differentiable solver
+        if self.use_differentiable_solver:
+            self.differentiable_solver = create_differentiable_wave_solver(solver_optimization_level)
+            print(f"Initialized differentiable wave solver with optimization level: {solver_optimization_level}")
+        else:
+            self.differentiable_solver = None
 
     # -------------------------------------------------------------
     def reset(self):
@@ -157,8 +169,14 @@ class AcousticEnv:
         # Ensure full_mesh has gradients and create a new tensor to avoid modifying the original
         full_mesh = self.full_mesh.clone().detach().requires_grad_(True)
 
-        # Simulate T on full mesh
-        T_grid = self.solver.simulate_T(full_mesh, source_pos)
+        # Choose solver based on configuration
+        if self.use_differentiable_solver and self.differentiable_solver is not None:
+            # Use differentiable solver that maintains gradient flow
+            T_grid = self.differentiable_solver.simulate_T(full_mesh, source_pos)
+        else:
+            # Use original non-differentiable solver
+            T_grid = self.solver.simulate_T(full_mesh, source_pos)
+        
         T_receivers = self._extract_receiver_values(T_grid, receiver_positions)
 
         # Compute reward using accuracy-based metric
@@ -290,15 +308,21 @@ class AcousticEnv:
         }
         return observation, total_accuracy_rewards, mission_done, info
 
-    def accuracy_reward(self, pred, target, power=10, multiple=1e-20):
-        # Compute percent accuracy per cell (assuming target > 0)
-        accuracy = 100 - (100* torch.abs(pred - target) / target.clamp(min=1e-6))
-        # Normalize to [0, 1]
-
-        # Scale using steep power law
+    def accuracy_reward(self, pred, target, power=10, multiple=1e-6):
+        """
+        High-power accuracy reward computation that gives more rewards to accurate values.
+        Uses exponential scaling to heavily reward accurate predictions.
+        """
+        # Compute relative error
+        relative_error = torch.abs(pred - target) / target.clamp(min=1e-6)
+        
+        # Convert to accuracy (1 - error), clamped to [0, 1]
+        accuracy = torch.clamp(1.0 - relative_error, min=0.0, max=1.0)
+        
+        # Apply high power to emphasize accurate predictions
         reward = multiple * accuracy.pow(power)
-
-        return reward.mean()  # average over all cells
+        
+        return reward.mean()  # average over all receivers
 
 
 
