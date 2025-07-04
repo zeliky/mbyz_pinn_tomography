@@ -142,16 +142,16 @@ def train_tof_to_sos_super_res():
     trainer = PINNTrainer(
         model=model,
         training_step_handler=TOFToSOSTrainingStep(
-            use_physics_loss=False,  # Start without physics loss
-            tof_range=(700, 900),    # Adjust based on your data
-            sos_range=(0.8, 2.1)     # Adjust based on your data
+            use_physics_loss=False,  # Disable physics loss initially for debugging
+            tof_range=(0, 800),    
+            sos_range=(0.08, 2.2)    
         ),
-        batch_size=4,  # Larger batch size for stable training
+        batch_size=15,  # Increase batch size for better gradient estimates
         train_dataset=TofDataset(['train']),
         val_dataset=TofDataset(['validation']),
         epochs=epochs,
-        lr=1e-4,  # Conservative learning rate
-        scheduler_step_size=10
+        lr=1e-3,  # Increase learning rate
+        scheduler_step_size=15
     )
     
     # Load checkpoint if available
@@ -221,7 +221,8 @@ if __name__ == "__main__":
     #train_combined_model()
     #train_multitof_to_sos_predictor()
     #train_gat_tof_sos_predictor()
-    train_gat_rl_agent_gat_policy()
+    # train_gat_rl_agent_gat_policy()
+    train_tof_to_sos_super_res()
     # Measure time
     et = time.process_time()
     res = et - st

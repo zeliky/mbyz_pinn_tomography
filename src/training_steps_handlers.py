@@ -60,7 +60,7 @@ class MultiRangeWeightedMSELoss(nn.Module):
             c1 = 0.1520;  % speed of sound in "anatomy" 1520-1550  0.0030 in cm/µs.            
             c3 = 0.1560;  % speed of sound in cancerous tumors 1550-1600 in cm/µs.
             c4 = 0.1530;  % speed of sound in benign tumors 1530-1580 in cm/µs.
-        """
+        """        
         ranges_weights =[
             (self.min_sos,   0.1400, 0),
             (0.1400,         0.4900, 0),
@@ -727,8 +727,8 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
     Training step handler for TOF-to-SOS super-resolution network.
     Converts 32x32 TOF matrix to 128x128 SOS map.
     """
-    
-    def __init__(self, use_physics_loss=False, tof_range=(700, 900), sos_range=(0.8, 2.1)):
+
+    def __init__(self, use_physics_loss=False, tof_range=(0, 800), sos_range=(0.08, 2.2)):
         super().__init__()
         self.use_physics_loss = use_physics_loss
         self.tof_min, self.tof_max = tof_range
@@ -768,17 +768,22 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
         
         # Forward pass
         sos_pred_normalized = self.model(tof_normalized)
+
+        # Compute main reconstruction loss on DENORMALIZED data for proper scaling
+        sos_pred_denorm = denormalize_sos(sos_pred_normalized, self.sos_min, self.sos_max)
+        sos_true_denorm = denormalize_sos(sos_true_normalized, self.sos_min, self.sos_max)
         
-        # Compute main reconstruction loss
-        mse_loss = self.criterion(sos_pred_normalized, sos_true_normalized)
+        # MSE loss on real SOS values (should be much larger)
+        mse_loss = self.criterion(sos_pred_denorm, sos_true_denorm)
         
-        # Compute weighted loss for important regions (tumors, etc.)
-        w_mse_loss = self.w_criterion(sos_pred_normalized, sos_true_normalized)
-        
+        # Compute weighted loss for important regions (tumors, etc.) - use normalized data for weighted loss
+        #w_mse_loss = self.w_criterion(sos_pred_normalized, sos_true_normalized)
+        w_mse_loss =0
+        w =0 
         # Balance weighted loss
-        w = 0
-        if mse_loss < 0.1:
-            w = _balance_order_of_magnitude(mse_loss, w_mse_loss) / 10
+        #w = 0
+        #if mse_loss < 0.1:
+        #    w = _balance_order_of_magnitude(mse_loss, w_mse_loss) / 10
         
         data_loss = mse_loss + w * w_mse_loss
         
@@ -810,16 +815,29 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
             
             # Get source/receiver positions if available
             if 'x_s' in batch and 'x_r' in batch:
-                sources = batch['x_s'].to(self.device)
-                receivers = batch['x_r'].to(self.device)
+                sources = batch['x_s'].to(self.device)  # [B, 32, 2]
+                receivers = batch['x_r'].to(self.device)  # [B, 32, 2]
                 
-                # Forward simulate TOF using predicted SOS
-                tof_simulated = self.wave_solver.forward_simulate(
-                    sos_pred.squeeze(), sources, receivers
-                )
+                batch_size = sos_pred.shape[0]
+                physics_loss = 0.0
                 
-                # Compare with measured TOF
-                physics_loss = self.criterion(tof_simulated, tof_measured.squeeze())
+                # Process each sample in the batch
+                for b in range(batch_size):
+                    sos_map = sos_pred[b, 0]  # [128, 128] - single SOS map
+                    sources_b = sources[b]    # [32, 2] - source positions
+                    receivers_b = receivers[b]  # [32, 2] - receiver positions
+                    tof_measured_b = tof_measured[b]  # [32, 32] - measured TOF matrix
+                    
+                    # Forward simulate TOF matrix using predicted SOS
+                    tof_simulated = self._forward_simulate_tof_matrix(
+                        sos_map, sources_b, receivers_b
+                    )
+                    
+                    # Compare with measured TOF matrix
+                    physics_loss += self.criterion(tof_simulated, tof_measured_b)
+                
+                # Average over batch
+                physics_loss = physics_loss / batch_size
                 return physics_loss
             else:
                 # No source/receiver positions available
@@ -829,11 +847,54 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
             log_message(f"Warning: Physics loss computation failed: {e}")
             return torch.tensor(0.0, device=self.device)
     
+    def _forward_simulate_tof_matrix(self, sos_map, sources, receivers):
+        """
+        Forward simulate TOF matrix from SOS map using differentiable wave solver.
+        
+        Args:
+            sos_map: [128, 128] SOS map
+            sources: [32, 2] source positions
+            receivers: [32, 2] receiver positions
+            
+        Returns:
+            tof_matrix: [32, 32] simulated TOF matrix where tof_matrix[i,j] = TOF from source i to receiver j
+        """
+        num_sources = sources.shape[0]
+        num_receivers = receivers.shape[0]
+        
+        # Initialize TOF matrix
+        tof_matrix = torch.zeros(num_sources, num_receivers, device=self.device)
+        
+        # For each source, compute TOF to all receivers
+        for i in range(num_sources):
+            source_pos = sources[i]  # [2] - (x, y) position
+            
+            # Run wave simulation from this source
+            T_grid = self.wave_solver.simulate_T(sos_map, source_pos)  # [128, 128]
+            
+            # Extract TOF values at receiver positions
+            for j in range(num_receivers):
+                receiver_pos = receivers[j]  # [2] - (x, y) position
+                
+                # Convert receiver position to grid indices
+                rx, ry = int(receiver_pos[0].item()), int(receiver_pos[1].item())
+                
+                # Clamp to valid grid bounds
+                rx = max(0, min(rx, T_grid.shape[1] - 1))
+                ry = max(0, min(ry, T_grid.shape[0] - 1))
+                
+                # Extract TOF value at receiver position
+                tof_matrix[i, j] = T_grid[ry, rx]
+        
+        return tof_matrix
+    
     def eval_model(self, batch):
         """
         Evaluate model and return denormalized SOS prediction.
         """
         tof_matrix = batch['raw_tof'].float().to(self.device)
+        print(tof_matrix.shape)
+        exit()
         
         # Ensure correct dimensions
         if len(tof_matrix.shape) == 3:
@@ -842,13 +903,13 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
         # Normalize input
         tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
         
+        
         # Forward pass
         with torch.no_grad():
             sos_pred_normalized = self.model(tof_normalized)
         
         # Denormalize output
-        sos_pred = denormalize_sos(sos_pred_normalized, self.sos_min, self.sos_max)
-        
+        sos_pred = denormalize_sos(sos_pred_normalized, self.sos_min, self.sos_max)       
         # Convert to numpy for compatibility with existing evaluation code
         sos_pred_np = sos_pred.cpu().numpy()
         
