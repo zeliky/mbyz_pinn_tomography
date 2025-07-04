@@ -104,7 +104,7 @@ def train_sos_predictor():
                           train_dataset=TofDataset(['train']),
                           val_dataset=TofDataset(['validation']),
                           epochs=epochs,
-                          lr=1e-3,
+                          lr=1e-1,
                           scheduler_step_size=4
                           )
     if sos_checkpoint_path is not None:
@@ -150,8 +150,7 @@ def train_tof_to_sos_super_res():
         train_dataset=TofDataset(['train']),
         val_dataset=TofDataset(['validation']),
         epochs=epochs,
-        lr=1e-3,  # Increase learning rate
-        scheduler_step_size=15
+        lr=1e-3  # Increase learning rate        
     )
     
     # Load checkpoint if available

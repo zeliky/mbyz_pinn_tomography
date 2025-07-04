@@ -12,7 +12,7 @@ from training_steps_handlers import   CombinedSosTofTrainingStep, TofToSosUNetTr
 from models.eikonal_solver import EikonalSolverMultiLayer
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-checkpoint_path = 'TOFToSOSSuperResNet.2025_07_04_01_20_15_489740-49.pth'
+checkpoint_path = 'TOFToSOSSuperResNet.2025_07_04_21_06_19_245676-39.pth'
 
 model = create_tof_to_sos_net(model_size='medium')
 

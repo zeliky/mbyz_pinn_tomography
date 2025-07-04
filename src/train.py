@@ -112,7 +112,7 @@ class PINNTrainer:
 
         num_epochs = self.epochs
         #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.scheduler_step_size, gamma=0.1)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, min_lr=1e-6)
 
         self.epochs_vec= [] # for visualization
         self.epoch_loss_vec = [] # for visualization

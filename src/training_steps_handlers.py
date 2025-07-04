@@ -24,7 +24,9 @@ class BaseTrainingStep:
         self.model = model
         self.device = device
         self.criterion = nn.MSELoss()
-        self.w_criterion = MultiRangeWeightedMSELoss()
+        #self.w_criterion = MultiRangeWeightedMSELoss()
+        self.w_criterion = ExponentialTissueLoss(device=device)
+
 
     def set_train_mode(self):
         self.model.train()
@@ -43,6 +45,44 @@ class BaseTrainingStep:
 
 
 
+class ExponentialTissueLoss(nn.Module):
+    def __init__(self, device, tissue_centers=None, tolerance=0.15):
+        super().__init__()
+        self.register_buffer('tissue_centers', torch.tensor([0.1, 0.8, 1.2, 1.5, 1.8, 2.1]))
+        self.tolerance = tolerance  # 0.15 tolerance around each center
+        self.min_sos = 0.1
+        self.max_sos = 2.1
+    
+    def forward(self, pred, target):
+        # Work with raw values (not normalized) for clearer tolerance interpretation
+        pred = torch.clamp(pred, self.min_sos, self.max_sos)
+        target = torch.clamp(target, self.min_sos, self.max_sos)
+        
+        # Find correct tissue centers for target values
+        target_distances = torch.abs(target.unsqueeze(-1) - self.tissue_centers)  # [B,H,W,6]
+        closest_target_idx = torch.argmin(target_distances, dim=-1)  # [B,H,W]
+        correct_centers = self.tissue_centers[closest_target_idx]  # [B,H,W]
+        
+        # Distance from prediction to correct center
+        pred_distance = torch.abs(pred - correct_centers)  # [B,H,W]
+        
+        # Aggressive step function:
+        # - Distance <= 0.15: loss ≈ 0
+        # - Distance > 0.15: loss = very high (100x)
+        
+        # Use smooth step function to avoid gradient issues
+        # Sigmoid that transitions sharply at tolerance boundary
+        steepness = 50.0  # Very steep transition
+        center_point = self.tolerance  # Transition at 0.15
+        
+        # Sigmoid: 0 at distance=0, rapidly increases after tolerance
+        step_loss = torch.sigmoid(steepness * (pred_distance - center_point))
+        
+        # Scale up the loss significantly for out-of-tolerance predictions
+        penalty_scale = 100.0  # Very high penalty
+        final_loss = step_loss * penalty_scale
+        
+        return final_loss.mean()
 
 
 class MultiRangeWeightedMSELoss(nn.Module):
@@ -773,18 +813,15 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
         sos_pred_denorm = denormalize_sos(sos_pred_normalized, self.sos_min, self.sos_max)
         sos_true_denorm = denormalize_sos(sos_true_normalized, self.sos_min, self.sos_max)
         
-        # MSE loss on real SOS values (should be much larger)
+        # MSE loss on real SOS values - ENABLED for proper reconstruction
         mse_loss = self.criterion(sos_pred_denorm, sos_true_denorm)
         
-        # Compute weighted loss for important regions (tumors, etc.) - use normalized data for weighted loss
-        #w_mse_loss = self.w_criterion(sos_pred_normalized, sos_true_normalized)
-        w_mse_loss =0
-        w =0 
-        # Balance weighted loss
-        #w = 0
-        #if mse_loss < 0.1:
-        #    w = _balance_order_of_magnitude(mse_loss, w_mse_loss) / 10
-        
+        # Compute weighted loss for important regions (tumors, etc.)
+        w_mse_loss = self.w_criterion(sos_pred_denorm, sos_true_denorm)
+ 
+        # Balance the losses: MSE for reconstruction + AggressiveTissue for discrete values
+        # Use higher weight for aggressive tissue loss to force discrete predictions
+        w = 10.0  # Higher weight for aggressive tissue loss
         data_loss = mse_loss + w * w_mse_loss
         
         # Physics-informed loss (optional)
@@ -893,8 +930,6 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
         Evaluate model and return denormalized SOS prediction.
         """
         tof_matrix = batch['raw_tof'].float().to(self.device)
-        print(tof_matrix.shape)
-        exit()
         
         # Ensure correct dimensions
         if len(tof_matrix.shape) == 3:
@@ -909,7 +944,8 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
             sos_pred_normalized = self.model(tof_normalized)
         
         # Denormalize output
-        sos_pred = denormalize_sos(sos_pred_normalized, self.sos_min, self.sos_max)       
+        sos_pred = denormalize_sos(sos_pred_normalized, self.sos_min, self.sos_max) 
+        print(f"sos_pred min:{sos_pred.min()} max:{sos_pred.max()} mean:{sos_pred.mean()}")      
         # Convert to numpy for compatibility with existing evaluation code
         sos_pred_np = sos_pred.cpu().numpy()
         
