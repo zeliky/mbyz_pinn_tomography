@@ -11,6 +11,7 @@ from settings import  app_settings
 import random
 import math
 from models.tof_to_sos_net import normalize_tof, denormalize_tof, normalize_sos, denormalize_sos
+from models.tof_to_sos_classifier import create_binary_mask_from_sos, compute_class_weights
 
 
 class BaseTrainingStep:
@@ -965,6 +966,200 @@ class TOFToSOSTrainingStep(BaseTrainingStep):
         tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
         
         return tof_normalized
+
+
+class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
+    """
+    Training step handler for TOF-to-SOS binary classification network.
+    Converts 32x32 TOF matrix to 128x128 binary probability map indicating "interesting" SOS regions (>1.5).
+    """
+
+    def __init__(self, sos_threshold=1.5, tof_range=(0, 800), sos_range=(0.08, 2.2), use_focal_loss=True):
+        super().__init__()
+        self.sos_threshold = sos_threshold
+        self.tof_min, self.tof_max = tof_range
+        self.sos_min, self.sos_max = sos_range
+        self.use_focal_loss = use_focal_loss
+        
+        # Initialize binary classification loss
+        self.bce_criterion = None
+        self.focal_criterion = None
+    
+    def init(self, model, device):
+        """Initialize the training step with model and device."""
+        super().init(model, device)
+        
+        # Binary Cross-Entropy loss for classification
+        self.bce_criterion = nn.BCELoss()
+        
+        # Focal loss for handling class imbalance (optional)
+        if self.use_focal_loss:
+            self.focal_criterion = FocalLoss(alpha=0.25, gamma=2.0)
+    
+    def perform_step(self, batch):
+        """
+        Perform one training step for binary classification.
+        
+        Expected batch format:
+        - 'raw_tof': 32x32 TOF matrix with real time values
+        - 'raw_sos': 128x128 SOS map with real speed values
+        """
+        # Get data from batch
+        tof_matrix = batch['raw_tof'].float().to(self.device)  # [B, 32, 32]
+        sos_true = batch['raw_sos'].float().to(self.device)    # [B, 128, 128]
+        
+        # Ensure correct dimensions
+        if len(tof_matrix.shape) == 3:
+            tof_matrix = tof_matrix.unsqueeze(1)  # [B, 1, 32, 32]
+        if len(sos_true.shape) == 3:
+            sos_true = sos_true.unsqueeze(1)      # [B, 1, 128, 128]
+        
+        # Create binary mask from SOS ground truth
+        binary_mask_true = create_binary_mask_from_sos(sos_true, self.sos_threshold)  # [B, 1, 128, 128]
+        
+        # Normalize TOF input for stable training
+        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        
+        # Forward pass - get raw logits
+        logits_pred = self.model(tof_normalized)  # [B, 1, 128, 128] raw logits
+        
+        # Compute classification losses (convert logits to probabilities for BCE)
+        prob_map_pred = torch.sigmoid(logits_pred)
+        bce_loss = self.bce_criterion(prob_map_pred, binary_mask_true)
+        
+        # Focal loss for handling class imbalance
+        focal_loss = 0.0
+        if self.use_focal_loss and self.focal_criterion is not None:
+            focal_loss = self.focal_criterion(prob_map_pred, binary_mask_true)
+        
+        # Compute class weights for current batch with capping to prevent explosion
+        pos_weight = compute_class_weights(binary_mask_true)
+        # Cap pos_weight to prevent gradient explosion
+        pos_weight = torch.clamp(pos_weight, min=1.0, max=20.0)
+        
+        # Weighted BCE loss to handle class imbalance
+        weighted_bce_loss = nn.functional.binary_cross_entropy_with_logits(
+            logits_pred, binary_mask_true, 
+            pos_weight=pos_weight.to(self.device)
+        )
+        
+        # Total classification loss
+        if self.use_focal_loss:
+            total_loss = 0.5 * weighted_bce_loss + 0.5 * focal_loss
+        else:
+            total_loss = weighted_bce_loss
+        
+        # Compute metrics for monitoring
+        with torch.no_grad():
+            # Binary predictions (threshold at 0.5)
+            binary_pred = (prob_map_pred > 0.5).float()
+            
+            # Accuracy
+            accuracy = (binary_pred == binary_mask_true).float().mean()
+            
+            # Precision and Recall for positive class
+            tp = ((binary_pred == 1) & (binary_mask_true == 1)).float().sum()
+            fp = ((binary_pred == 1) & (binary_mask_true == 0)).float().sum()
+            fn = ((binary_pred == 0) & (binary_mask_true == 1)).float().sum()
+            
+            precision = tp / (tp + fp + 1e-8)
+            recall = tp / (tp + fn + 1e-8)
+            f1_score = 2 * precision * recall / (precision + recall + 1e-8)
+            
+            # Count of positive pixels
+            true_positives = binary_mask_true.sum().item()
+            pred_positives = binary_pred.sum().item()
+        
+        # Check for NaN/inf values
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            log_message(f"WARNING: NaN/Inf detected in total_loss: {total_loss}")
+            log_message(f"  BCE: {bce_loss}, Weighted BCE: {weighted_bce_loss}, Focal: {focal_loss}")
+            log_message(f"  pos_weight: {pos_weight}, logits range: [{logits_pred.min():.3f}, {logits_pred.max():.3f}]")
+        
+        log_message(
+            f"Classification Loss - Total: {total_loss:.6f}, BCE: {bce_loss:.6f}, "
+            f"Weighted BCE: {weighted_bce_loss:.6f}, Focal: {focal_loss:.6f}, pos_weight: {pos_weight:.3f}"
+        )
+        log_message(
+            f"Metrics - Acc: {accuracy:.4f}, Prec: {precision:.4f}, Rec: {recall:.4f}, "
+            f"F1: {f1_score:.4f}, True+: {true_positives}, Pred+: {pred_positives}"
+        )
+        
+        return total_loss, weighted_bce_loss, focal_loss, bce_loss
+    
+    def eval_model(self, batch):
+        """
+        Evaluate model and return binary probability map.
+        """
+        tof_matrix = batch['raw_tof'].float().to(self.device)
+        
+        # Ensure correct dimensions
+        if len(tof_matrix.shape) == 3:
+            tof_matrix = tof_matrix.unsqueeze(1)  # [B, 1, 32, 32]
+        
+        # Normalize input
+        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        
+        # Forward pass
+        with torch.no_grad():
+            prob_map = self.model(tof_normalized)  # [B, 1, 128, 128]
+        
+        # Convert to numpy for compatibility with existing evaluation code
+        prob_map_np = prob_map.cpu().numpy()
+        
+        return prob_map_np
+    
+    def get_model_input_data(self, batch):
+        """
+        Extract model input data from batch.
+        """
+        tof_matrix = batch['raw_tof'].float().to(self.device)
+        
+        # Ensure correct dimensions
+        if len(tof_matrix.shape) == 3:
+            tof_matrix = tof_matrix.unsqueeze(1)  # [B, 1, 32, 32]
+        
+        # Normalize input
+        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        
+        return tof_normalized
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for addressing class imbalance in binary classification.
+    
+    Focal Loss = -α(1-p_t)^γ * log(p_t)
+    where p_t is the model's estimated probability for the true class.
+    """
+    
+    def __init__(self, alpha=0.25, gamma=2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+    
+    def forward(self, pred, target):
+        """
+        Args:
+            pred: Predicted probabilities [B, 1, H, W]
+            target: Binary ground truth [B, 1, H, W]
+        """
+        # Compute binary cross entropy
+        bce_loss = nn.functional.binary_cross_entropy(pred, target, reduction='none')
+        
+        # Compute p_t
+        p_t = pred * target + (1 - pred) * (1 - target)
+        
+        # Compute focal weight: (1 - p_t)^gamma
+        focal_weight = (1 - p_t) ** self.gamma
+        
+        # Compute alpha weight
+        alpha_weight = self.alpha * target + (1 - self.alpha) * (1 - target)
+        
+        # Focal loss
+        focal_loss = alpha_weight * focal_weight * bce_loss
+        
+        return focal_loss.mean()
 
 
 def _balance_weights(loss_tof, loss_sos, loss_pde,loss_bc):

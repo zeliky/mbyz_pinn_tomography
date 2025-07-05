@@ -11,9 +11,10 @@ from models.pinn_unet import MultiSourceTOFModel
 from models.pinn_combined import CombinedSosTofModel
 from models.gat import DualHeadGATModel, SosEstimator
 from models.tof_to_sos_net import TOFToSOSSuperResNet, create_tof_to_sos_net
+from models.tof_to_sos_classifier import create_tof_to_sos_classifier
 from RL.policy.gnn_policy import GNNPolicy
 from training_steps_handlers import (RLAgetTrainingStep,TofToSosUNetTrainingStep, TofPredictorTrainingStep, CombinedSosTofTrainingStep,
-                                     TOFtoSOSPINNLinerTrainingStep, DualHeadGATTrainingStep, TOFToSOSTrainingStep)
+                                     TOFtoSOSPINNLinerTrainingStep, DualHeadGATTrainingStep, TOFToSOSTrainingStep, TOFToSOSClassificationTrainingStep)
 import os
 import time
 from TimeMeasurement.time_measurement import convert
@@ -208,6 +209,66 @@ def train_combined_model():
     log_message("[main.py] Training pipeline complete.")
 
 
+def train_tof_to_sos_classifier():
+    """
+    Train the TOF-to-SOS binary classification network.
+    Converts 32x32 TOF matrix to 128x128 binary probability map indicating "interesting" SOS regions (>1.5).
+    This approach should solve the convergence issues by focusing on binary classification instead of regression.
+    """
+    global sos_checkpoint_path
+    epochs = 50
+    sos_threshold = 1.1  # Threshold for "interesting" regions
+    
+    # Create classification model - you can choose 'light', 'medium', or 'heavy'
+    model = create_tof_to_sos_classifier(model_size='heavy', sos_threshold=sos_threshold)
+    
+    # Print model information
+    info = model.get_model_info()
+    log_message(f"TOF-to-SOS Classifier Info:")
+    log_message(f"  Parameters: {info['total_parameters']:,}")
+    log_message(f"  Input size: {info['input_size']}")
+    log_message(f"  Output size: {info['output_size']}")
+    log_message(f"  Model type: {info['model_type']}")
+    log_message(f"  SOS threshold: {info['sos_threshold']}")
+    log_message(f"  Output type: {info['output_type']}")
+    log_message(f"  Use attention: {info['use_attention']}")
+    log_message(f"  Use residual: {info['use_residual']}")
+    
+    # Create trainer with classification training step
+    trainer = PINNTrainer(
+        model=model,
+        training_step_handler=TOFToSOSClassificationTrainingStep(
+            sos_threshold=sos_threshold,
+            tof_range=(0, 800),    
+            sos_range=(0.08, 2.2),
+            use_focal_loss=False  # Disable focal loss initially to prevent explosion
+        ),
+        batch_size=10,  # Smaller batch size for more stable training
+        train_dataset=TofDataset(['train']),
+        val_dataset=TofDataset(['validation']),
+        epochs=epochs,
+        lr=1e-3  # Lower learning rate to prevent gradient explosion
+    )
+    
+    # Load checkpoint if available
+    if sos_checkpoint_path is not None:
+        trainer.load_checkpoint(sos_checkpoint_path)
+        log_message(f"Loaded checkpoint: {sos_checkpoint_path}")
+    
+    # Train the model
+    log_message("Starting TOF-to-SOS binary classification training...")
+    log_message(f"Target: Detect regions with SOS > {sos_threshold}")
+    log_message("This should solve convergence issues by using binary classification instead of regression.")
+    trainer.train_model()
+    log_message(' ')
+
+    # Visualize training progress
+    trainer.visualize_training_and_validation()
+
+    log_message("[main.py] TOF-to-SOS binary classification training complete.")
+    log_message("Next step: Use RL agent to refine exact SOS values in detected regions.")
+
+
 if __name__ == "__main__":
     # define the terminal_html folder and initiate the corresponding class 'terminal_html'
     st = time.process_time()
@@ -221,7 +282,8 @@ if __name__ == "__main__":
     #train_multitof_to_sos_predictor()
     #train_gat_tof_sos_predictor()
     # train_gat_rl_agent_gat_policy()
-    train_tof_to_sos_super_res()
+    #train_tof_to_sos_super_res()
+    train_tof_to_sos_classifier()
     # Measure time
     et = time.process_time()
     res = et - st

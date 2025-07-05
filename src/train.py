@@ -146,6 +146,10 @@ class PINNTrainer:
                     self.weighted_bc_loss_vec.append(weighted_bc_loss) # for visualization
                     
                     loss.backward()
+                    
+                    # Add gradient clipping to prevent explosion
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    
                     optimizer.step()
                     epoch_loss += loss.item()
                     pbar.update(1)
@@ -365,5 +369,3 @@ def _to_pixel_coordinates(src, W, H):
     norm_pixels[:, 1] = norm_pixels[:, 1] * (H - 1)
 
     return norm_pixels
-
-
