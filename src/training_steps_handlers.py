@@ -10,8 +10,10 @@ from logger import log_message, log_image
 from settings import  app_settings
 import random
 import math
-from models.tof_to_sos_net import normalize_tof, denormalize_tof, normalize_sos, denormalize_sos
+from models.tof_to_sos_net import normalize_tof, denormalize_tof,normalize_tof_zscore, normalize_sos, denormalize_sos
 from models.tof_to_sos_classifier import create_binary_mask_from_sos, compute_class_weights
+import torch.nn.functional as F
+from scipy import ndimage
 
 
 class BaseTrainingStep:
@@ -972,18 +974,25 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
     """
     Training step handler for TOF-to-SOS binary classification network.
     Converts 32x32 TOF matrix to 128x128 binary probability map indicating "interesting" SOS regions (>1.5).
+    Enhanced with physics-informed and morphological coherence constraints.
     """
 
-    def __init__(self, sos_threshold=1.5, tof_range=(0, 800), sos_range=(0.08, 2.2), use_focal_loss=True):
+    def __init__(self, sos_threshold=1.5, tof_range=(0, 800), sos_range=(0.08, 2.2), 
+                 use_focal_loss=True, use_physics_loss=True, use_morphological_loss=True):
         super().__init__()
         self.sos_threshold = sos_threshold
         self.tof_min, self.tof_max = tof_range
         self.sos_min, self.sos_max = sos_range
         self.use_focal_loss = use_focal_loss
+        self.use_physics_loss = use_physics_loss
+        self.use_morphological_loss = use_morphological_loss
         
         # Initialize binary classification loss
         self.bce_criterion = None
         self.focal_criterion = None
+        self.physics_criterion = None
+        self.morphological_criterion = None
+        self.smoothness_criterion = None
     
     def init(self, model, device):
         """Initialize the training step with model and device."""
@@ -995,6 +1004,23 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         # Focal loss for handling class imbalance (optional)
         if self.use_focal_loss:
             self.focal_criterion = FocalLoss(alpha=0.25, gamma=2.0)
+        
+        # Physics-informed loss using eikonal equation
+        if self.use_physics_loss:
+            self.physics_criterion = EikonalPhysicsLoss(
+                sos_background=1.0, 
+                sos_high=self.sos_threshold,
+                pixel_size=1.0
+            )
+        
+        # Morphological coherence loss for spatial consistency
+        if self.use_morphological_loss:
+            self.morphological_criterion = MorphologicalCoherenceLoss(
+                target_size=(12, 12),
+                min_size=9,   # 3x3 minimum
+                max_size=144   # 12x12 maximum
+            )
+            self.smoothness_criterion = SpatialSmoothnessLoss()
     
     def perform_step(self, batch):
         """
@@ -1007,6 +1033,9 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         # Get data from batch
         tof_matrix = batch['raw_tof'].float().to(self.device)  # [B, 32, 32]
         sos_true = batch['raw_sos'].float().to(self.device)    # [B, 128, 128]
+        tof_map = batch['tof_maps'].float().to(self.device)    # [B, 32, 128, 128]    
+        mean_tof = tof_matrix.mean()
+        std_tof = tof_matrix[1].std()
         
         # Ensure correct dimensions
         if len(tof_matrix.shape) == 3:
@@ -1018,8 +1047,9 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         binary_mask_true = create_binary_mask_from_sos(sos_true, self.sos_threshold)  # [B, 1, 128, 128]
         
         # Normalize TOF input for stable training
-        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
-        
+        #tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        tof_normalized = normalize_tof_zscore(tof_matrix, mean=mean_tof, std=std_tof)
+       
         # Forward pass - get raw logits
         logits_pred = self.model(tof_normalized)  # [B, 1, 128, 128] raw logits
         
@@ -1035,7 +1065,7 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         # Compute class weights for current batch with capping to prevent explosion
         pos_weight = compute_class_weights(binary_mask_true)
         # Cap pos_weight to prevent gradient explosion
-        pos_weight = torch.clamp(pos_weight, min=1.0, max=20.0)
+        pos_weight = torch.clamp(pos_weight, min=1.0, max=100.0)
         
         # Weighted BCE loss to handle class imbalance
         weighted_bce_loss = nn.functional.binary_cross_entropy_with_logits(
@@ -1043,11 +1073,38 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
             pos_weight=pos_weight.to(self.device)
         )
         
-        # Total classification loss
+        # Physics-informed loss using eikonal equation |∇T| = 1/c
+        physics_loss = 0.0
+        if self.use_physics_loss and self.physics_criterion is not None:
+            num_sources_to_use = 3  # Use 3 random sources
+            for _ in range(num_sources_to_use):
+                source_idx = random.randint(0, 31)
+                selected_tof_map = tof_map[:, source_idx:source_idx+1, :, :]  # [B, 1, 128, 128]
+                physics_loss += self.physics_criterion(prob_map_pred, selected_tof_map)
+            physics_loss /= num_sources_to_use
+            
+        
+        # Morphological coherence loss for spatial consistency
+        morphological_loss = 0.0
+        smoothness_loss = 0.0
+        if self.use_morphological_loss and self.morphological_criterion is not None:
+            morphological_loss = self.morphological_criterion(prob_map_pred, threshold=0.5)
+            smoothness_loss = self.smoothness_criterion(prob_map_pred)
+        
+        # Total classification loss with physics and morphological constraints
+        classification_loss = weighted_bce_loss
         if self.use_focal_loss:
-            total_loss = 0.5 * weighted_bce_loss + 0.5 * focal_loss
-        else:
-            total_loss = weighted_bce_loss
+            classification_loss = 0.5 * weighted_bce_loss + 0.5 * focal_loss
+        
+        # Combine all losses with appropriate weights
+        physics_weight = 0.1 if self.use_physics_loss else 0.0
+        morphological_weight = 0.05 if self.use_morphological_loss else 0.0
+        smoothness_weight = 0.01 if self.use_morphological_loss else 0.0
+
+        total_loss = (classification_loss + 
+                     physics_weight * physics_loss + 
+                     morphological_weight * morphological_loss + 
+                     smoothness_weight * smoothness_loss)
         
         # Compute metrics for monitoring
         with torch.no_grad():
@@ -1074,6 +1131,7 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         if torch.isnan(total_loss) or torch.isinf(total_loss):
             log_message(f"WARNING: NaN/Inf detected in total_loss: {total_loss}")
             log_message(f"  BCE: {bce_loss}, Weighted BCE: {weighted_bce_loss}, Focal: {focal_loss}")
+            log_message(f"  Physics: {physics_loss}, Morphological: {morphological_loss}, Smoothness: {smoothness_loss}")
             log_message(f"  pos_weight: {pos_weight}, logits range: [{logits_pred.min():.3f}, {logits_pred.max():.3f}]")
         
         log_message(
@@ -1081,11 +1139,16 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
             f"Weighted BCE: {weighted_bce_loss:.6f}, Focal: {focal_loss:.6f}, pos_weight: {pos_weight:.3f}"
         )
         log_message(
+            f"Physics Loss: {physics_loss:.6f} (w={physics_weight:.3f}), "
+            f"Morphological: {morphological_loss:.6f} (w={morphological_weight:.3f}), "
+            f"Smoothness: {smoothness_loss:.6f} (w={smoothness_weight:.3f})"
+        )
+        log_message(
             f"Metrics - Acc: {accuracy:.4f}, Prec: {precision:.4f}, Rec: {recall:.4f}, "
             f"F1: {f1_score:.4f}, True+: {true_positives}, Pred+: {pred_positives}"
         )
         
-        return total_loss, weighted_bce_loss, focal_loss, bce_loss
+        return total_loss, weighted_bce_loss, physics_loss, morphological_loss
     
     def eval_model(self, batch):
         """
@@ -1102,11 +1165,10 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         
         # Forward pass
         with torch.no_grad():
-            prob_map = self.model(tof_normalized)  # [B, 1, 128, 128]
-        
+            logits_pred = self.model(tof_normalized)  # [B, 1, 128, 128]
+            prob_map = torch.sigmoid(logits_pred)
         # Convert to numpy for compatibility with existing evaluation code
         prob_map_np = prob_map.cpu().numpy()
-        
         return prob_map_np
     
     def get_model_input_data(self, batch):
@@ -1160,6 +1222,219 @@ class FocalLoss(nn.Module):
         focal_loss = alpha_weight * focal_weight * bce_loss
         
         return focal_loss.mean()
+
+
+class EikonalPhysicsLoss(nn.Module):
+    """
+    Physics-informed loss using the eikonal equation |∇T| = 1/c.
+    Enforces wave propagation physics on predicted probability regions.
+    """
+    
+    def __init__(self, sos_background=1.0, sos_high=1.8, pixel_size=1.0):
+        super().__init__()
+        self.sos_background = sos_background
+        self.sos_high = sos_high
+        self.pixel_size = pixel_size
+    
+    def forward(self, prob_map, tof_reference=None):
+        """
+        Args:
+            prob_map: [B, 1, H, W] - predicted probability map
+            tof_reference: [B, 1, H, W] - reference TOF field (optional, computed if None)
+        
+        Returns:
+            physics_loss: scalar tensor
+        """
+        batch_size, _, height, width = prob_map.shape
+        
+        # Create SOS map from probability: background + prob * (high - background)
+        sos_map = self.sos_background + prob_map * (self.sos_high - self.sos_background)
+        
+        # If no reference TOF provided, create a simple radial field from center
+        if tof_reference is None:
+            tof_reference = self._create_reference_tof_field(batch_size, height, width, prob_map.device)
+        
+        # Compute gradients of TOF field
+        grad_y, grad_x = torch.gradient(tof_reference, dim=(-2, -1))
+        grad_magnitude = torch.sqrt(grad_x**2 + grad_y**2 + 1e-8)
+        
+        # Eikonal constraint: |∇T| = 1/c
+        expected_grad = 1.0 / (sos_map + 1e-8)
+        
+        # Physics loss - only apply where probability is significant
+        prob_mask = (prob_map > 0.1).float()  # Only enforce physics in predicted regions
+        physics_residual = (grad_magnitude - expected_grad) ** 2
+        masked_residual = physics_residual * prob_mask
+        
+        # Weighted average by probability mass
+        total_weight = prob_mask.sum() + 1e-8
+        physics_loss = masked_residual.sum() / total_weight
+        
+        return physics_loss
+    
+    def _create_reference_tof_field(self, batch_size, height, width, device):
+        """Create a simple radial TOF field from image center."""
+        # Create coordinate grids
+        y_coords = torch.arange(height, device=device).float()
+        x_coords = torch.arange(width, device=device).float()
+        Y, X = torch.meshgrid(y_coords, x_coords, indexing='ij')
+        
+        # Center coordinates
+        center_y, center_x = height // 2, width // 2
+        
+        # Radial distance from center
+        distance = torch.sqrt((Y - center_y)**2 + (X - center_x)**2)
+        
+        # Simple TOF field: distance / background_speed
+        tof_field = distance / self.sos_background
+        
+        # Expand to batch dimensions
+        tof_field = tof_field.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1, -1)
+        
+        return tof_field
+
+
+class MorphologicalCoherenceLoss(nn.Module):
+    """
+    Morphological loss to encourage spatially coherent regions.
+    Favors connected components of target size (~5x5 ellipses).
+    """
+    
+    def __init__(self, target_size=(5, 5), min_size=9, max_size=49):
+        super().__init__()
+        self.target_size = target_size
+        self.min_size = min_size  # 3x3
+        self.max_size = max_size  # 7x7
+        
+        # Morphological kernels
+        self.register_buffer('erosion_kernel', torch.ones(1, 1, 3, 3).to('cuda'))
+        self.register_buffer('dilation_kernel', torch.ones(1, 1, 3, 3).to('cuda'))
+    
+    def forward(self, prob_map, threshold=0.5):
+        """
+        Args:
+            prob_map: [B, 1, H, W] - predicted probability map
+            threshold: threshold for binary conversion
+        
+        Returns:
+            morphological_loss: scalar tensor
+        """
+        # Convert to binary mask
+        binary_mask = (prob_map > threshold).float()
+        
+        # Compute connected components loss
+        connectivity_loss = self._compute_connectivity_loss(binary_mask)
+        
+        # Compute size regularization loss
+        size_loss = self._compute_size_loss(binary_mask)
+        
+        # Compute compactness loss (favor circular/elliptical shapes)
+        compactness_loss = self._compute_compactness_loss(binary_mask)
+        
+        # Total morphological loss
+        total_loss = connectivity_loss + 0.5 * size_loss + 0.3 * compactness_loss
+        
+        return total_loss
+    
+    def _compute_connectivity_loss(self, binary_mask):
+        """Penalize isolated pixels, reward connected components."""
+        # Erosion followed by dilation (opening) removes small isolated pixels
+        eroded = F.conv2d(binary_mask, self.erosion_kernel, padding=1)
+        eroded = (eroded >= 9).float()  # All 9 pixels in 3x3 must be 1
+        
+        opened = F.conv2d(eroded, self.dilation_kernel, padding=1)
+        opened = (opened >= 1).float()  # At least 1 pixel in 3x3 is 1
+        
+        # Loss: difference between original and opened (isolated pixels)
+        isolated_pixels = binary_mask - opened
+        connectivity_loss = isolated_pixels.sum() / (binary_mask.sum() + 1e-8)
+        
+        return connectivity_loss
+    
+    def _compute_size_loss(self, binary_mask):
+        """Penalize regions that are too small or too large."""
+        batch_size = binary_mask.shape[0]
+        size_loss = 0.0
+        
+        for b in range(batch_size):
+            mask_np = binary_mask[b, 0].cpu().numpy()
+            
+            # Find connected components
+            labeled, num_features = ndimage.label(mask_np)
+            
+            if num_features == 0:
+                continue
+            
+            # Compute size penalty for each component
+            for i in range(1, num_features + 1):
+                component_size = (labeled == i).sum()
+                
+                # Penalty for being too small or too large
+                if component_size < self.min_size:
+                    size_loss += (self.min_size - component_size) / self.min_size
+                elif component_size > self.max_size:
+                    size_loss += (component_size - self.max_size) / self.max_size
+        
+        return size_loss / batch_size
+    
+    def _compute_compactness_loss(self, binary_mask):
+        """Favor compact (circular/elliptical) shapes over irregular ones."""
+        # Use morphological operations to measure compactness
+        # Compact shapes have similar area after erosion/dilation cycles
+        
+        # Original area
+        original_area = binary_mask.sum(dim=(-2, -1))
+        
+        # Area after erosion
+        eroded = F.conv2d(binary_mask, self.erosion_kernel, padding=1)
+        eroded = (eroded >= 9).float()
+        eroded_area = eroded.sum(dim=(-2, -1))
+        
+        # Area after dilation of eroded (should be similar to original for compact shapes)
+        dilated = F.conv2d(eroded, self.dilation_kernel, padding=1)
+        dilated = (dilated >= 1).float()
+        dilated_area = dilated.sum(dim=(-2, -1))
+        
+        # Compactness: how much area is preserved through erosion-dilation
+        compactness = dilated_area / (original_area + 1e-8)
+        compactness_loss = (1.0 - compactness).mean()
+        
+        return compactness_loss
+
+
+class SpatialSmoothnessLoss(nn.Module):
+    """
+    Spatial smoothness loss for probability boundaries.
+    Encourages smooth transitions at region boundaries.
+    """
+    
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, prob_map):
+        """
+        Args:
+            prob_map: [B, 1, H, W] - predicted probability map
+        
+        Returns:
+            smoothness_loss: scalar tensor
+        """
+        # Compute gradients
+        grad_y, grad_x = torch.gradient(prob_map, dim=(-2, -1))
+        
+        # Total variation loss (L1 norm of gradients)
+        tv_loss = torch.mean(torch.abs(grad_x) + torch.abs(grad_y))
+        
+        # Second-order smoothness (Laplacian)
+        grad_xx = torch.gradient(grad_x, dim=-1)[0]
+        grad_yy = torch.gradient(grad_y, dim=-2)[0]
+        laplacian = grad_xx + grad_yy
+        laplacian_loss = torch.mean(laplacian ** 2)
+        
+        # Combined smoothness loss
+        smoothness_loss = tv_loss + 0.1 * laplacian_loss
+        
+        return smoothness_loss
 
 
 def _balance_weights(loss_tof, loss_sos, loss_pde,loss_bc):

@@ -137,7 +137,7 @@ class TOFToSOSHeavyClassifier(TOFToSOSClassifier):
     def __init__(self, sos_threshold=1.5):
         super().__init__(
             base_filters=96,
-            use_attention=False,
+            use_attention=True,
             use_residual=True,
             sos_threshold=sos_threshold
         )

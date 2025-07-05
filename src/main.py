@@ -220,7 +220,7 @@ def train_tof_to_sos_classifier():
     sos_threshold = 1.1  # Threshold for "interesting" regions
     
     # Create classification model - you can choose 'light', 'medium', or 'heavy'
-    model = create_tof_to_sos_classifier(model_size='heavy', sos_threshold=sos_threshold)
+    model = create_tof_to_sos_classifier(model_size='medium', sos_threshold=sos_threshold)
     
     # Print model information
     info = model.get_model_info()
@@ -241,13 +241,15 @@ def train_tof_to_sos_classifier():
             sos_threshold=sos_threshold,
             tof_range=(0, 800),    
             sos_range=(0.08, 2.2),
-            use_focal_loss=False  # Disable focal loss initially to prevent explosion
+            use_focal_loss=False,  # Disable focal loss initially to prevent explosion
+            use_physics_loss=True,  # Enable eikonal physics constraint |∇T| = 1/c
+            use_morphological_loss=True  # Enable spatial coherence constraints
         ),
-        batch_size=10,  # Smaller batch size for more stable training
+        batch_size=5,  # Smaller batch size for more stable training
         train_dataset=TofDataset(['train']),
         val_dataset=TofDataset(['validation']),
         epochs=epochs,
-        lr=1e-3  # Lower learning rate to prevent gradient explosion
+        lr=1e-3 # Lower learning rate to prevent gradient explosion
     )
     
     # Load checkpoint if available

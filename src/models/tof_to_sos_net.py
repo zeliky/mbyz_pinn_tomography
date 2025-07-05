@@ -278,6 +278,10 @@ def normalize_tof(tof_matrix, tof_min=700, tof_max=900):
     """Normalize TOF values to [0, 1] range."""
     return (tof_matrix - tof_min) / (tof_max - tof_min)
 
+def normalize_tof_zscore(tof, mean, std):
+    """Normalize using mean and standard deviation"""
+    return (tof - mean) / std
+
 
 def denormalize_tof(tof_normalized, tof_min=700, tof_max=900):
     """Denormalize TOF values back to original range."""
