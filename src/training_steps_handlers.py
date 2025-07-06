@@ -978,7 +978,8 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
     """
 
     def __init__(self, sos_threshold=1.5, tof_range=(0, 800), sos_range=(0.08, 2.2), 
-                 use_focal_loss=True, use_physics_loss=True, use_morphological_loss=True):
+                 use_focal_loss=True, use_physics_loss=True, use_morphological_loss=True,
+                 use_precision_loss=True, use_hard_negative_mining=True):
         super().__init__()
         self.sos_threshold = sos_threshold
         self.tof_min, self.tof_max = tof_range
@@ -986,6 +987,8 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         self.use_focal_loss = use_focal_loss
         self.use_physics_loss = use_physics_loss
         self.use_morphological_loss = use_morphological_loss
+        self.use_precision_loss = use_precision_loss
+        self.use_hard_negative_mining = use_hard_negative_mining
         
         # Initialize binary classification loss
         self.bce_criterion = None
@@ -993,6 +996,8 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         self.physics_criterion = None
         self.morphological_criterion = None
         self.smoothness_criterion = None
+        self.precision_criterion = None
+        self.hard_negative_criterion = None
     
     def init(self, model, device):
         """Initialize the training step with model and device."""
@@ -1021,6 +1026,14 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
                 max_size=144   # 12x12 maximum
             )
             self.smoothness_criterion = SpatialSmoothnessLoss()
+        
+        # Precision-focused loss for better precision
+        if self.use_precision_loss:
+            self.precision_criterion = PrecisionFocusedLoss(precision_weight=2.0)
+        
+        # Hard negative mining for focusing on difficult false positives
+        if self.use_hard_negative_mining:
+            self.hard_negative_criterion = HardNegativeMiningLoss(neg_ratio=3, hard_ratio=0.7)
     
     def perform_step(self, batch):
         """
@@ -1073,15 +1086,16 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
             pos_weight=pos_weight.to(self.device)
         )
         
-        # Physics-informed loss using eikonal equation |∇T| = 1/c
+        # Physics-informed loss - REMOVED (now handled by PhysicsAttention internally)
         physics_loss = 0.0
-        if self.use_physics_loss and self.physics_criterion is not None:
-            num_sources_to_use = 3  # Use 3 random sources
-            for _ in range(num_sources_to_use):
-                source_idx = random.randint(0, 31)
-                selected_tof_map = tof_map[:, source_idx:source_idx+1, :, :]  # [B, 1, 128, 128]
-                physics_loss += self.physics_criterion(prob_map_pred, selected_tof_map)
-            physics_loss /= num_sources_to_use
+        
+        # Optional: Auxiliary loss from PhysicsAttention mechanism
+        auxiliary_loss = 0.0
+        if hasattr(self.model, 'get_auxiliary_outputs'):
+            aux_outputs = self.model.get_auxiliary_outputs()
+            if 'physics_residual' in aux_outputs:
+                # Encourage low physics residuals (optional regularization)
+                auxiliary_loss = aux_outputs['physics_residual'].mean()
             
         
         # Morphological coherence loss for spatial consistency
@@ -1096,15 +1110,15 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
         if self.use_focal_loss:
             classification_loss = 0.5 * weighted_bce_loss + 0.5 * focal_loss
         
-        # Combine all losses with appropriate weights
-        physics_weight = 0.1 if self.use_physics_loss else 0.0
-        morphological_weight = 0.05 if self.use_morphological_loss else 0.0
+        # Simplified loss combination (physics now handled internally by PhysicsAttention)
+        morphological_weight = 0.1 if self.use_morphological_loss else 0.0
         smoothness_weight = 0.01 if self.use_morphological_loss else 0.0
+        auxiliary_weight = 0.05  # Weight for auxiliary loss from attention mechanism
 
         total_loss = (classification_loss + 
-                     physics_weight * physics_loss + 
                      morphological_weight * morphological_loss + 
-                     smoothness_weight * smoothness_loss)
+                     smoothness_weight * smoothness_loss +
+                     auxiliary_weight * auxiliary_loss)
         
         # Compute metrics for monitoring
         with torch.no_grad():
@@ -1161,7 +1175,10 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
             tof_matrix = tof_matrix.unsqueeze(1)  # [B, 1, 32, 32]
         
         # Normalize input
-        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        # tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        mean_tof = tof_matrix.mean()
+        std_tof = tof_matrix[1].std()
+        tof_normalized = normalize_tof_zscore(tof_matrix, mean=mean_tof, std=std_tof)
         
         # Forward pass
         with torch.no_grad():
@@ -1182,7 +1199,10 @@ class TOFToSOSClassificationTrainingStep(BaseTrainingStep):
             tof_matrix = tof_matrix.unsqueeze(1)  # [B, 1, 32, 32]
         
         # Normalize input
-        tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        mean_tof = tof_matrix.mean()
+        std_tof = tof_matrix[1].std()
+        #tof_normalized = normalize_tof(tof_matrix, self.tof_min, self.tof_max)
+        tof_normalized = normalize_tof_zscore(tof_matrix, mean=mean_tof, std=std_tof)
         
         return tof_normalized
 
@@ -1435,6 +1455,132 @@ class SpatialSmoothnessLoss(nn.Module):
         smoothness_loss = tv_loss + 0.1 * laplacian_loss
         
         return smoothness_loss
+
+
+class PrecisionFocusedLoss(nn.Module):
+    """
+    Precision-focused loss that directly optimizes precision in the loss function.
+    Uses F-beta score with higher weight on precision to reduce false positives.
+    """
+    
+    def __init__(self, precision_weight=2.0, smooth=1e-8):
+        super().__init__()
+        self.precision_weight = precision_weight  # Beta parameter - higher = more precision focus
+        self.smooth = smooth
+    
+    def forward(self, pred, target):
+        """
+        Args:
+            pred: Predicted probabilities [B, 1, H, W]
+            target: Binary ground truth [B, 1, H, W]
+        
+        Returns:
+            precision_focused_loss: scalar tensor (lower = better precision)
+        """
+        # Flatten for easier computation
+        pred_flat = pred.view(-1)
+        target_flat = target.view(-1)
+        
+        # Compute true positives, false positives, false negatives
+        tp = (pred_flat * target_flat).sum()
+        fp = (pred_flat * (1 - target_flat)).sum()
+        fn = ((1 - pred_flat) * target_flat).sum()
+        
+        # Compute precision and recall
+        precision = tp / (tp + fp + self.smooth)
+        recall = tp / (tp + fn + self.smooth)
+        
+        # F-beta score with emphasis on precision
+        # F_beta = (1 + beta^2) * precision * recall / (beta^2 * precision + recall)
+        # Higher beta = more weight on precision
+        beta_squared = self.precision_weight ** 2
+        f_beta = (1 + beta_squared) * precision * recall / \
+                 (beta_squared * precision + recall + self.smooth)
+        
+        # Return negative F-beta as loss (minimize negative = maximize F-beta)
+        return 1.0 - f_beta
+
+
+class HardNegativeMiningLoss(nn.Module):
+    """
+    Hard negative mining loss that focuses training on the hardest false positives.
+    Helps improve precision by making the model work harder on difficult negative examples.
+    """
+    
+    def __init__(self, neg_ratio=3, hard_ratio=0.7):
+        super().__init__()
+        self.neg_ratio = neg_ratio      # Ratio of negatives to positives to use
+        self.hard_ratio = hard_ratio    # Fraction of negatives that should be "hard"
+    
+    def forward(self, pred, target):
+        """
+        Args:
+            pred: Predicted probabilities [B, 1, H, W]
+            target: Binary ground truth [B, 1, H, W]
+        
+        Returns:
+            hard_negative_loss: scalar tensor
+        """
+        # Flatten for easier computation
+        pred_flat = pred.view(-1)
+        target_flat = target.view(-1)
+        
+        # Separate positive and negative examples
+        pos_mask = (target_flat == 1)
+        neg_mask = (target_flat == 0)
+        
+        # Positive loss (standard)
+        pos_loss = 0.0
+        if pos_mask.sum() > 0:
+            pos_probs = pred_flat[pos_mask]
+            pos_loss = -torch.log(pos_probs + 1e-8).mean()
+        
+        # Hard negative mining
+        neg_loss = 0.0
+        if neg_mask.sum() > 0:
+            neg_probs = pred_flat[neg_mask]
+            num_pos = pos_mask.sum().item()
+            
+            # Select hard negatives (high confidence false positives)
+            num_neg_total = min(self.neg_ratio * num_pos, neg_mask.sum().item())
+            num_hard_neg = int(self.hard_ratio * num_neg_total)
+            num_easy_neg = num_neg_total - num_hard_neg
+            
+            if num_hard_neg > 0:
+                # Get hardest negatives (highest predicted probabilities)
+                hard_neg_probs, _ = torch.topk(neg_probs, k=min(num_hard_neg, len(neg_probs)))
+                hard_neg_loss = -torch.log(1 - hard_neg_probs + 1e-8).mean()
+            else:
+                hard_neg_loss = 0.0
+            
+            if num_easy_neg > 0:
+                # Get easier negatives (random sampling from remaining)
+                remaining_neg_probs = neg_probs
+                if num_hard_neg > 0:
+                    # Remove hard negatives from consideration
+                    _, hard_indices = torch.topk(neg_probs, k=min(num_hard_neg, len(neg_probs)))
+                    mask = torch.ones_like(neg_probs, dtype=torch.bool)
+                    mask[hard_indices] = False
+                    remaining_neg_probs = neg_probs[mask]
+                
+                if len(remaining_neg_probs) > 0:
+                    # Random sample from remaining
+                    num_sample = min(num_easy_neg, len(remaining_neg_probs))
+                    indices = torch.randperm(len(remaining_neg_probs))[:num_sample]
+                    easy_neg_probs = remaining_neg_probs[indices]
+                    easy_neg_loss = -torch.log(1 - easy_neg_probs + 1e-8).mean()
+                else:
+                    easy_neg_loss = 0.0
+            else:
+                easy_neg_loss = 0.0
+            
+            # Combine hard and easy negative losses (weight hard negatives more)
+            neg_loss = 2.0 * hard_neg_loss + 1.0 * easy_neg_loss
+        
+        # Total loss
+        total_loss = pos_loss + neg_loss
+        
+        return total_loss
 
 
 def _balance_weights(loss_tof, loss_sos, loss_pde,loss_bc):

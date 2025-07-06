@@ -41,6 +41,67 @@ class SelfAttention2D(nn.Module):
         return out
 
 
+class TOFGuidedAttention(nn.Module):
+    """
+    TOF-guided attention module that forces the model to use TOF input patterns
+    to generate attention weights, improving precision by preventing TOF-independent predictions.
+    """
+    
+    def __init__(self, feature_channels, tof_channels=1):
+        super().__init__()
+        self.feature_channels = feature_channels
+        self.tof_channels = tof_channels
+        
+        # Learn attention weights FROM TOF input
+        self.tof_attention = nn.Sequential(
+            nn.Conv2d(tof_channels, feature_channels // 4, 3, padding=1),
+            nn.BatchNorm2d(feature_channels // 4),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(feature_channels // 4, feature_channels // 2, 3, padding=1),
+            nn.BatchNorm2d(feature_channels // 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(feature_channels // 2, feature_channels, 3, padding=1),
+            nn.Sigmoid()  # Attention weights [0,1]
+        )
+        
+        # Optional: Learn feature refinement
+        self.feature_refine = nn.Sequential(
+            nn.Conv2d(feature_channels, feature_channels, 3, padding=1),
+            nn.BatchNorm2d(feature_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Learnable mixing parameter
+        self.gamma = nn.Parameter(torch.zeros(1))
+        
+    def forward(self, features, tof_input):
+        """
+        Args:
+            features: [B, C, H, W] - feature maps from encoder/bottleneck
+            tof_input: [B, 1, 32, 32] - original TOF input
+            
+        Returns:
+            attended_features: [B, C, H, W] - TOF-guided attended features
+            attention_weights: [B, C, H, W] - attention weights for visualization
+        """
+        # Upsample TOF to match feature resolution
+        tof_resized = F.interpolate(tof_input, size=features.shape[-2:], mode='bilinear', align_corners=False)
+        
+        # Generate attention weights FROM TOF patterns
+        attention_weights = self.tof_attention(tof_resized)
+        
+        # Apply TOF-guided attention to features
+        attended_features = features * attention_weights
+        
+        # Optional feature refinement
+        refined_features = self.feature_refine(attended_features)
+        
+        # Residual connection with learnable weight
+        output = self.gamma * refined_features + features
+        
+        return output, attention_weights
+
+
 class ResidualBlock(nn.Module):
     """Residual block with batch normalization."""
     
@@ -116,9 +177,9 @@ class TOFToSOSSuperResNet(nn.Module):
         # Bottleneck: Global feature processing
         bottleneck_layers = []
         
-        # Self-attention for global TOF relationships
+        # TOF-guided attention for forcing TOF dependency
         if self.use_attention:
-            bottleneck_layers.append(SelfAttention2D(base_filters * 8))
+            self.bottleneck_tof_attention = TOFGuidedAttention(base_filters * 8, tof_channels=1)
         
         # Residual blocks for feature refinement
         if self.use_residual:
@@ -193,14 +254,24 @@ class TOFToSOSSuperResNet(nn.Module):
         Returns:
             sos_map: Predicted SOS map [batch_size, 1, 128, 128]
         """
+        # Store original TOF input for attention
+        tof_input = x
+        
         # Encoder path
         enc1 = self.enc_conv1(x)      # 32x32x64
         enc2 = self.enc_conv2(enc1)   # 16x16x128
         enc3 = self.enc_conv3(enc2)   # 8x8x256
         enc4 = self.enc_conv4(enc3)   # 4x4x512
         
-        # Bottleneck processing
-        bottleneck = self.bottleneck(enc4)  # 4x4x512
+        # Bottleneck processing with TOF-guided attention
+        if self.use_attention:
+            # Apply TOF-guided attention
+            attended_bottleneck, attn_weights = self.bottleneck_tof_attention(enc4, tof_input)
+            # Apply residual blocks
+            bottleneck = self.bottleneck(attended_bottleneck)  # 4x4x512
+        else:
+            # Standard bottleneck processing
+            bottleneck = self.bottleneck(enc4)  # 4x4x512
         
         # Decoder path
         dec1 = self.dec_conv1(bottleneck)  # 8x8x256

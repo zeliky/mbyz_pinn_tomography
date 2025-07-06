@@ -243,13 +243,15 @@ def train_tof_to_sos_classifier():
             sos_range=(0.08, 2.2),
             use_focal_loss=False,  # Disable focal loss initially to prevent explosion
             use_physics_loss=True,  # Enable eikonal physics constraint |∇T| = 1/c
-            use_morphological_loss=True  # Enable spatial coherence constraints
+            use_morphological_loss=True,  # Enable spatial coherence constraints
+            use_precision_loss=True,  # Enable precision-focused F-beta loss
+            use_hard_negative_mining=True  # Enable hard negative mining for false positives
         ),
         batch_size=5,  # Smaller batch size for more stable training
         train_dataset=TofDataset(['train']),
         val_dataset=TofDataset(['validation']),
         epochs=epochs,
-        lr=1e-3 # Lower learning rate to prevent gradient explosion
+        lr=1e-4  # Lower learning rate to prevent gradient explosion
     )
     
     # Load checkpoint if available
