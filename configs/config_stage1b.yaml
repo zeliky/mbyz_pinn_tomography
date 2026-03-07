@@ -1,0 +1,9 @@
+# Stage 1B: alpha + smooth correction calibration.
+defaults:
+  - _self_
+  - data: default
+  - training: stage1b
+
+seed: 42
+device: cuda
+experiment_name: stage1b_calibration

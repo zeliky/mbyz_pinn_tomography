@@ -1,0 +1,27 @@
+stage: stage1a
+
+# Physical SoS bounds (same units as data min_sos/max_sos)
+# Example: 1500/1450/1800 for mm/s; use 1.5/1.45/1.8 if data uses 0.1-2.1 range
+c_base_phys: 1500.0
+c_min_phys: 1450.0
+c_max_phys: 1800.0
+
+# Stage 0 checkpoint
+checkpoint_path: checkpoints/stage0/best.pt
+checkpoint_dir: checkpoints/stage1a
+
+alpha_search:
+  method: line_search
+  min: 0.0
+  max: 2.0
+  num_steps: 21
+
+loss:
+  type: huber
+  delta: 0.01
+  w_tof: 1.0
+  w_bounds: 10.0
+  w_anchor: 0.1
+
+# Optional: scale FMM output to match observed ToF units
+scale_factor: 1.0
