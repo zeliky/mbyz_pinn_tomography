@@ -1,4 +1,4 @@
-"""Stage 0: train initializer only (raw_tof -> 128x128 normalized SOS)."""
+"""Stage 0: train initializer only (raw_tof -> 128x128 normalized residual delta_c0)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,11 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from tomo.data.datamodule import TomographyDataModule
-from tomo.initializers.unet_initializer import SRInitializerNet
+from tomo.initializers.unet_initializer import (
+    c0_normalized_from_delta,
+    delta_target_from_anatomy,
+    normalized_c_base_from_config,
+)
 
 
 def _ensure_raw_tof_4d(raw_tof: torch.Tensor) -> torch.Tensor:
@@ -35,24 +39,27 @@ def _train_epoch(
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    normalized_c_base: float,
 ) -> tuple[float, float]:
     model.train()
     total_loss = 0.0
-    total_mse = 0.0
+    total_mse_recon = 0.0
     n = 0
     for batch in loader:
         raw_tof = _ensure_raw_tof_4d(batch["raw_tof"]).to(device)
-        target = batch["anatomy"].to(device)
+        anatomy = batch["anatomy"].to(device)
+        delta_target = delta_target_from_anatomy(anatomy, normalized_c_base)
         optimizer.zero_grad()
-        pred = model(raw_tof)
-        loss = criterion(pred, target)
+        delta_pred = model(raw_tof)
+        loss = criterion(delta_pred, delta_target)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
         with torch.no_grad():
-            total_mse += nn.functional.mse_loss(pred, target).item()
+            c0_pred_norm = c0_normalized_from_delta(normalized_c_base, delta_pred)
+            total_mse_recon += nn.functional.mse_loss(c0_pred_norm, anatomy).item()
         n += 1
-    return total_loss / max(n, 1), total_mse / max(n, 1)
+    return total_loss / max(n, 1), total_mse_recon / max(n, 1)
 
 
 @torch.no_grad()
@@ -61,19 +68,22 @@ def _validate(
     loader: DataLoader[dict[str, Any]],
     criterion: nn.Module,
     device: torch.device,
+    normalized_c_base: float,
 ) -> tuple[float, float]:
     model.eval()
     total_loss = 0.0
-    total_mse = 0.0
+    total_mse_recon = 0.0
     n = 0
     for batch in loader:
         raw_tof = _ensure_raw_tof_4d(batch["raw_tof"]).to(device)
-        target = batch["anatomy"].to(device)
-        pred = model(raw_tof)
-        total_loss += criterion(pred, target).item()
-        total_mse += nn.functional.mse_loss(pred, target).item()
+        anatomy = batch["anatomy"].to(device)
+        delta_target = delta_target_from_anatomy(anatomy, normalized_c_base)
+        delta_pred = model(raw_tof)
+        total_loss += criterion(delta_pred, delta_target).item()
+        c0_pred_norm = c0_normalized_from_delta(normalized_c_base, delta_pred)
+        total_mse_recon += nn.functional.mse_loss(c0_pred_norm, anatomy).item()
         n += 1
-    return total_loss / max(n, 1), total_mse / max(n, 1)
+    return total_loss / max(n, 1), total_mse_recon / max(n, 1)
 
 
 def run_stage0(
@@ -84,11 +94,17 @@ def run_stage0(
     device: torch.device | None = None,
 ) -> str | None:
     """
-    Run Stage 0 training: train SR initializer on raw_tof -> anatomy.
+    Run Stage 0 training: train SR initializer on raw_tof -> delta_c0 (residual).
+    Target: delta_target = clamp(anatomy - normalized_c_base, 0, 1). Loss on residual.
     Returns path to best checkpoint, or None if no checkpoint saved.
     """
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
+
+    min_sos = data_config["min_sos"]
+    max_sos = data_config["max_sos"]
+    c_base = data_config.get("c_base", 1.5)
+    normalized_c_base = normalized_c_base_from_config(min_sos, max_sos, c_base)
 
     dm = TomographyDataModule(data_config)
     dm.setup()
@@ -116,15 +132,22 @@ def run_stage0(
     last_val_mse: float | None = None
 
     for epoch in range(epochs):
-        train_loss, train_mse = _train_epoch(
-            model, train_loader, criterion, optimizer, device
+        train_loss, train_mse_recon = _train_epoch(
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            device,
+            normalized_c_base,
         )
         if (epoch + 1) % val_every == 0 or epoch == 0:
-            val_loss, val_mse = _validate(model, val_loader, criterion, device)
-            last_val_loss, last_val_mse = val_loss, val_mse
+            val_loss, val_mse_recon = _validate(
+                model, val_loader, criterion, device, normalized_c_base
+            )
+            last_val_loss, last_val_mse = val_loss, val_mse_recon
             print(
-                f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  train_mse={train_mse:.6f}  "
-                f"val_loss={val_loss:.4f}  val_mse={val_mse:.6f}"
+                f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  train_mse_recon={train_mse_recon:.6f}  "
+                f"val_loss={val_loss:.4f}  val_mse_recon={val_mse_recon:.6f}"
             )
             if save_best and val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -134,12 +157,14 @@ def run_stage0(
                         "model_state_dict": model.state_dict(),
                         "epoch": epoch + 1,
                         "val_loss": val_loss,
-                        "val_mse": val_mse,
+                        "val_mse_recon": val_mse_recon,
                     },
                     best_path,
                 )
         else:
-            print(f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  train_mse={train_mse:.6f}")
+            print(
+                f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  train_mse_recon={train_mse_recon:.6f}"
+            )
 
     if save_last:
         last_path = os.path.join(checkpoint_dir, "last.pt")
@@ -148,7 +173,7 @@ def run_stage0(
                 "model_state_dict": model.state_dict(),
                 "epoch": epochs,
                 "val_loss": last_val_loss,
-                "val_mse": last_val_mse,
+                "val_mse_recon": last_val_mse,
             },
             last_path,
         )

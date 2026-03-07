@@ -1,7 +1,7 @@
 """UNet initializer: learned 32x32 -> 128x128 TOF-to-SoS super-resolution.
 
-Stage 0: SRInitializerNet is trained with forward(raw_tof) -> sos_pred.
-UNetInitializer remains a stub for later stages (loads checkpoint, observation -> SoSState).
+Stage 0: SRInitializerNet predicts normalized non-negative residual delta_c0 above c_base.
+UNetInitializer loads checkpoint and builds c0 = c_base + delta_c0_pred.
 """
 
 from __future__ import annotations
@@ -13,6 +13,31 @@ import torch.nn.functional as F
 from tomo.initializers.base import Initializer
 from tomo.state.observation import Observation
 from tomo.state.sos_state import SoSState
+
+
+def normalized_c_base_from_config(min_sos: float, max_sos: float, c_base: float) -> float:
+    """Compute normalized baseline in [0, 1] from physical c_base and SOS range."""
+    return float(
+        torch.clamp(
+            torch.tensor((c_base - min_sos) / (max_sos - min_sos)),
+            0.0,
+            1.0,
+        ).item()
+    )
+
+
+def delta_target_from_anatomy(
+    anatomy: torch.Tensor, normalized_c_base: float
+) -> torch.Tensor:
+    """Non-negative residual target: clamp(normalized_sos - normalized_c_base, 0, 1)."""
+    return (anatomy - normalized_c_base).clamp(min=0.0, max=1.0)
+
+
+def c0_normalized_from_delta(
+    normalized_c_base: float, delta: torch.Tensor
+) -> torch.Tensor:
+    """Reconstruct normalized c0 from baseline and predicted delta; output in [0, 1]."""
+    return (normalized_c_base + delta).clamp(0.0, 1.0)
 
 
 class ResidualBlock(nn.Module):
@@ -76,8 +101,10 @@ class TOFGuidedAttention(nn.Module):
 
 class SRInitializerNet(nn.Module):
     """
-    Super-resolution net: raw_tof [B, 1, 32, 32] -> sos_pred [B, 1, 128, 128].
-    Encoder-decoder with optional TOFGuidedAttention in bottleneck.
+    Super-resolution net: raw_tof [B, 1, 32, 32] -> delta_c0 [B, 1, 128, 128].
+    Output is normalized non-negative residual above c_base; call sites compute
+    normalized_c0 = normalized_c_base + delta_c0. Encoder-decoder with optional
+    TOFGuidedAttention in bottleneck.
     """
 
     def __init__(
@@ -169,7 +196,7 @@ class SRInitializerNet(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, raw_tof: torch.Tensor) -> torch.Tensor:
-        """Input [B, 1, 32, 32], output [B, 1, 128, 128]."""
+        """Input [B, 1, 32, 32], output delta_c0 [B, 1, 128, 128] in [0, 1]."""
         tof_input = raw_tof
         enc1 = self.enc_conv1(raw_tof)
         enc2 = self.enc_conv2(enc1)
@@ -192,30 +219,88 @@ class SRInitializerNet(nn.Module):
 
 class UNetInitializer(Initializer):
     """
-    Learned initializer: TOF -> c0 grid. Outputs SoSState.
-    Stub for Stage 0: returns constant c0; later loads SRInitializerNet checkpoint.
+    Learned initializer: TOF -> c0 grid via c_base + delta_c0_pred. Outputs SoSState.
+    When _net is set, runs SRInitializerNet and builds c0 from normalized_c_base + delta.
     """
 
     def __init__(
         self,
         num_nodes: int = 64,
         c0_fallback: float = 1.5,
+        min_sos: float = 0.1,
+        max_sos: float = 2.1,
+        c_base: float = 1.5,
         in_channels: int = 32,
         device: torch.device | None = None,
+        net: nn.Module | None = None,
     ) -> None:
         self.num_nodes = num_nodes
         self.c0_fallback = c0_fallback
+        self._min_sos = min_sos
+        self._max_sos = max_sos
+        self._c_base = c_base
         self._device = device
-        self._net: nn.Module | None = None
+        self._net = net
+        self._normalized_c_base: float | None = None
+
+    def _get_normalized_c_base(self) -> float:
+        if self._normalized_c_base is None:
+            self._normalized_c_base = normalized_c_base_from_config(
+                self._min_sos, self._max_sos, self._c_base
+            )
+        return self._normalized_c_base
+
+    def load_checkpoint(self, path: str, device: torch.device | None = None) -> None:
+        """Load SRInitializerNet state_dict from checkpoint. Creates net if needed."""
+        ckpt = torch.load(path, map_location=device or "cpu", weights_only=False)
+        state = ckpt.get("model_state_dict", ckpt)
+        if self._net is None:
+            self._net = SRInitializerNet()
+        self._net.load_state_dict(state, strict=True)
+        if device is not None:
+            self._net = self._net.to(device)
+        self._device = device or self._device
 
     def __call__(self, observation: Observation) -> SoSState:
-        if self._net is not None:
-            raise NotImplementedError("UNet forward not yet ported")
         device = self._device or observation.tof_observed.device
-        c_values = torch.full(
-            (self.num_nodes,),
-            self.c0_fallback,
-            device=device,
-            dtype=observation.tof_observed.dtype,
-        )
-        return SoSState(c_values=c_values, step_idx=0)
+        if self._net is None:
+            c_values = torch.full(
+                (self.num_nodes,),
+                self.c0_fallback,
+                device=device,
+                dtype=observation.tof_observed.dtype,
+            )
+            return SoSState(c_values=c_values, step_idx=0)
+
+        tof = observation.tof_observed
+        if tof.dim() == 2:
+            raw_tof = tof.unsqueeze(0).unsqueeze(0)
+        elif tof.dim() == 3:
+            raw_tof = tof.unsqueeze(0) if tof.shape[0] != 1 else tof
+        else:
+            raw_tof = tof.reshape(1, 1, 32, 32)
+        if raw_tof.shape[-2:] != (32, 32):
+            raw_tof = F.interpolate(
+                raw_tof.float(),
+                size=(32, 32),
+                mode="bilinear",
+                align_corners=False,
+            )
+        raw_tof = raw_tof.to(device)
+        self._net.eval()
+        with torch.no_grad():
+            delta_pred = self._net(raw_tof)
+        norm_base = self._get_normalized_c_base()
+        c0_normalized = c0_normalized_from_delta(norm_base, delta_pred)
+        c0_physical = self._min_sos + c0_normalized * (self._max_sos - self._min_sos)
+        c_values = c0_physical.reshape(-1)
+        if c_values.shape[0] != self.num_nodes and self.num_nodes > 0:
+            if c_values.shape[0] >= self.num_nodes:
+                c_values = c_values[: self.num_nodes]
+            else:
+                c_values = F.pad(
+                    c_values,
+                    (0, self.num_nodes - c_values.shape[0]),
+                    value=self.c0_fallback,
+                )
+        return SoSState(c_values=c_values.to(device), step_idx=0)

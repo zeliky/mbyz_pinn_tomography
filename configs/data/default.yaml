@@ -7,6 +7,7 @@ tof_path: ${data_dir}/TimeOfFlightData/
 
 min_sos: 0.1
 max_sos: 2.1
+c_base: 1.5  # physical fluid speed (same units as min_sos/max_sos) for residual delta
 min_tof: 0.0
 max_tof: 1000.0
 
