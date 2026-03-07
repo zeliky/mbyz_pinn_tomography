@@ -1,0 +1,28 @@
+# PINN Tomography Rebuild Rules
+
+You are an expert AI Engineer restructuring a Tomography system. 
+Follow these strict architectural guidelines to maintain a "Machine-Readable" and modular codebase.
+
+## 1. The Core Architecture (The Five Roles)
+Every new class or module MUST belong to one of these roles. If a component feels "mixed," refactor it.
+- **State**: The only persistent object (`SoSState`). Holds `c_values` and `step_idx`.
+- **Operator**: Physics-core (GAT/FMM). Signature: `tof_pred = operator(state, observation_graph)`.
+- **Initializer**: Optional. Proposes `c0` from an `Observation`.
+- **Policy**: Learned optimizer. Proposes `delta_c`, not a final solution.
+- **Objective**: Composable losses. No loss logic inside Models/Operators.
+
+## 2. Coding Standards
+- **Python Version**: 3.11+
+- **Tooling**: Use `uv` for dependencies, `Ruff` for linting/formatting, and `mypy` for typing.
+- **Type Safety**: All core orchestration and data contracts MUST have complete type hints using `Pydantic v2` or `Standard Typing`.
+- **Config**: Use `Hydra` for experiment composition. Never hardcode hyperparameters.
+
+## 3. Strict Prohibitions (Hard Rules)
+- **NO Competing Pipelines**: Do not create separate `train_model_A.py` and `train_model_B.py`. Everything runs through the unified `TomographySystem`.
+- **NO Embedded Losses**: Models must NOT contain `.loss()` methods. Use the `Objective` contract.
+- **NO Global State**: All data must flow through the `SoSState` or `Observation` objects.
+
+## 4. Interaction Instructions
+- When suggesting code, always identify which "Role" the code fulfills.
+- If the user asks for a change that violates the "State-Operator-Policy" flow, warn them and suggest a modular alternative.
+- Prioritize `src/tomo/` for logic and `scripts/` for entry points.

@@ -1,0 +1,11 @@
+defaults:
+  - _self_
+  - data: default
+  - operator: gat_fmm
+  - initializer: none
+  - policy: none
+  - training: baseline
+
+seed: 42
+device: cuda
+experiment_name: operator_baseline

@@ -1,0 +1,4 @@
+_target_: tomo.operators.gat_fmm_operator.GATFMMOperator
+num_fmm_iterations: 3
+min_sos: 1.2
+max_sos: 2.5
