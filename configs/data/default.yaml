@@ -1,0 +1,3 @@
+# Data config for baseline
+batch_size: 4
+num_workers: 0

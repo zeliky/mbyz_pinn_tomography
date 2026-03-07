@@ -1,0 +1,7 @@
+_target_: tomo.policies.gnn_policy.GNNPolicy
+num_sensor_nodes: 64
+in_channels: 6
+hidden_channels: 16
+num_heads: 8
+dropout: 0.1
+delta_scale: 0.1

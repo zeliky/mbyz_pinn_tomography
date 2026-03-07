@@ -1,0 +1,2 @@
+_target_: tomo.initializers.constant_init.ConstantInitializer
+c0: 1.5
