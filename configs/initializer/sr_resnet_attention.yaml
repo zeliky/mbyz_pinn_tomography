@@ -1,0 +1,6 @@
+_target_: tomo.initializers.unet_initializer.SRInitializerNet
+input_channels: 1
+output_channels: 1
+base_filters: 64
+use_attention: true
+use_residual: true

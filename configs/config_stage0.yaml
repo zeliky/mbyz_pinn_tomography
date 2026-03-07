@@ -1,0 +1,11 @@
+# Stage 0: initializer-only training (no operator/policy).
+# Override initializer to use sr_resnet_attention: python scripts/train_stage0.py initializer=sr_resnet_attention
+defaults:
+  - _self_
+  - data: default
+  - initializer: sr_resnet_baseline
+  - training: stage0
+
+seed: 42
+device: cuda
+experiment_name: stage0_initializer

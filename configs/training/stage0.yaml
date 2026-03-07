@@ -1,0 +1,7 @@
+epochs: 50
+lr: 0.001
+loss: smooth_l1  # l1 | smooth_l1
+checkpoint_dir: checkpoints/stage0
+save_best: true
+save_last: true
+val_every: 1  # validate every N epochs
