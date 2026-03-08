@@ -37,7 +37,7 @@ class GATFMMOperator(Operator):
         """Predict ToF via FMM iterations. c from state; T_init from graph.x[:, 0] or inf."""
         num_nodes = state.c_values.shape[0]
         device = state.c_values.device
-        # c in [min_sos, max_sos]
+        # c in [min_sos, max_sos] (sigmoid over state; distinct from tomo.utils.units scaled [0,1] SoS)
         c = self.min_sos + (self.max_sos - self.min_sos) * torch.sigmoid(state.c_values)
 
         if observation_graph.x is not None and observation_graph.x.shape[1] >= 1:

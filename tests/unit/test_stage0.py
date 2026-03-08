@@ -89,3 +89,25 @@ def test_stage0_one_step_backward_residual() -> None:
     assert isinstance(train_loss, float)
     assert isinstance(train_mse_recon, float)
     assert train_loss >= 0.0
+
+
+def test_stage0_forward_pass_scaled_to_physical() -> None:
+    """Smoke test: one forward pass, c0 in [0,1], physical in [min_sos, max_sos]."""
+    import numpy as np
+
+    from tomo.utils.units import to_physical_sos
+
+    model = SRInitializerNet(use_attention=False)
+    model.eval()
+    min_sos, max_sos = 0.1, 2.1
+    normalized_c_base = normalized_c_base_from_config(min_sos, max_sos, 1.5)
+    x = torch.rand(2, 1, 32, 32)
+    with torch.no_grad():
+        delta_pred = model(x)
+    c0_normalized = c0_normalized_from_delta(normalized_c_base, delta_pred)
+    assert c0_normalized.shape == (2, 1, 128, 128)
+    assert c0_normalized.min() >= 0.0 and c0_normalized.max() <= 1.0
+    c0_np = c0_normalized[0, 0].numpy()
+    c0_phys = to_physical_sos(c0_np, min_sos, max_sos)
+    assert c0_phys.shape == (128, 128)
+    assert float(np.min(c0_phys)) >= min_sos - 1e-6 and float(np.max(c0_phys)) <= max_sos + 1e-6

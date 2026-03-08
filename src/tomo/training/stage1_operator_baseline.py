@@ -43,6 +43,9 @@ def _run_stage1_preflight(
     c_max_phys: float,
     tof_output_scale: float,
     coord_range: tuple[float, float] | None,
+    *,
+    preflight_tof_ratio_min: float = 0.01,
+    preflight_tof_ratio_max: float = 100.0,
 ) -> None:
     """Run preflight checks before Stage 1A/1B. Exits with clear message on failure."""
     # 1. FMM wrapper can run
@@ -73,7 +76,11 @@ def _run_stage1_preflight(
     obs = Observation(tof_observed=raw_tof_4d.squeeze(0))
     with torch.no_grad():
         state = initializer(obs)
-    c0_phys = state.c_values.reshape(128, 128).cpu().numpy()
+    c0_phys = (
+        state.c_map_2d.cpu().numpy()
+        if state.c_map_2d is not None
+        else state.c_values.reshape(128, 128).cpu().numpy()
+    )
     delta_c0_phys = c0_phys - c_base_phys
     if delta_c0_phys.shape != (128, 128):
         print(
@@ -87,6 +94,15 @@ def _run_stage1_preflight(
 
     c_base_scaled = to_scaled_sos(c_base_phys, min_sos, max_sos)
     delta_c0_scaled = physical_delta_to_scaled(delta_c0_phys, min_sos, max_sos)
+    if delta_c0_scaled.shape != (128, 128):
+        print(
+            f"Stage 1 preflight failed: delta_c0_scaled shape {delta_c0_scaled.shape} != (128, 128).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not np.isfinite(delta_c0_scaled).all():
+        print("Stage 1 preflight failed: delta_c0_scaled contains NaN or Inf.", file=sys.stderr)
+        sys.exit(1)
 
     # 4. c_map_scaled stats in [0, 1]
     c_map_scaled = params_to_c_map_scaled(
@@ -133,9 +149,27 @@ def _run_stage1_preflight(
     elif raw_tof_np.ndim == 3:
         raw_tof_np = raw_tof_np[0]
     tof_pred = forward_tof(c_map_phys, x_s, x_r, scale_factor=tof_output_scale)
+    if not np.isfinite(tof_pred).all():
+        print("Stage 1 preflight failed: forward_tof returned non-finite values.", file=sys.stderr)
+        sys.exit(1)
     if tof_pred.shape != raw_tof_np.shape:
         print(
             f"Stage 1 preflight failed: forward_tof shape {tof_pred.shape} != raw_tof shape {raw_tof_np.shape}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # 7. scale_factor validation: ToF order-of-magnitude check
+    pred_median = float(np.median(tof_pred))
+    obs_median = float(np.median(raw_tof_np))
+    if obs_median <= 0:
+        obs_median = np.finfo(np.float64).tiny
+    ratio = pred_median / obs_median
+    if ratio < preflight_tof_ratio_min or ratio > preflight_tof_ratio_max:
+        print(
+            "Stage 1 preflight failed: predicted ToF and observed ToF differ by more than two orders of magnitude; "
+            f"likely scale_factor mismatch. Predicted median: {pred_median}, observed median: {obs_median}. "
+            f"Check scale_factor (currently {tof_output_scale}) and SoS units.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -174,6 +208,13 @@ def run_stage1_operator_baseline(
     c_base_scaled = to_scaled_sos(c_base_phys, min_sos, max_sos)
 
     checkpoint_path = training_config.get("checkpoint_path", "checkpoints/stage0/best.pt")
+    if not Path(checkpoint_path).exists():
+        print(
+            f"Stage 1 preflight failed: checkpoint not found: {checkpoint_path}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     checkpoint_dir = training_config.get("checkpoint_dir", "checkpoints/stage1a")
     if run_stage1b and stage == "stage1a":
         checkpoint_dir_1b = training_config.get(
@@ -209,6 +250,8 @@ def run_stage1_operator_baseline(
     coord_range = training_config.get("coord_range")
     if coord_range is not None:
         coord_range = tuple(coord_range)
+    preflight_tof_ratio_min = training_config.get("preflight_tof_ratio_min", 0.01)
+    preflight_tof_ratio_max = training_config.get("preflight_tof_ratio_max", 100.0)
 
     _run_stage1_preflight(
         loader,
@@ -220,6 +263,8 @@ def run_stage1_operator_baseline(
         c_max_phys,
         tof_output_scale,
         coord_range,
+        preflight_tof_ratio_min=preflight_tof_ratio_min,
+        preflight_tof_ratio_max=preflight_tof_ratio_max,
     )
 
     results: list[dict[str, Any]] = []
@@ -240,8 +285,11 @@ def run_stage1_operator_baseline(
             obs = Observation(tof_observed=raw_tof.squeeze(0))
             with torch.no_grad():
                 state = initializer(obs)
-            c0_flat = state.c_values
-            c0_phys = c0_flat.reshape(128, 128).cpu().numpy()
+            c0_phys = (
+                state.c_map_2d.cpu().numpy()
+                if state.c_map_2d is not None
+                else state.c_values.reshape(128, 128).cpu().numpy()
+            )
             delta_c0_phys = c0_phys - c_base_phys
             delta_c0_scaled = physical_delta_to_scaled(delta_c0_phys, min_sos, max_sos)
 

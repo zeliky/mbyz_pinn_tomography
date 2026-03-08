@@ -7,6 +7,8 @@ Call sites must convert c_map_scaled to physical via to_physical_sos before the 
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from scipy.ndimage import gaussian_filter, zoom
 
@@ -83,7 +85,11 @@ def params_to_c_map(
     apply_gaussian: bool = False,
     sigma: float = 0.5,
 ) -> np.ndarray:
-    """Convert search parameters to c_map.
+    """Convert search parameters to c_map (physical units).
+
+    .. deprecated::
+        Prefer params_to_c_map_scaled + to_physical_sos for Stage 1.
+        This physical-space helper is deprecated and may be removed in a future release.
 
     Stage 1A: params = [alpha], c_map = c_base + alpha * delta_c0.
     Stage 1B: params = [alpha, z_0, ..., z_{n-1}], smooth_correction from z grid.
@@ -101,6 +107,11 @@ def params_to_c_map(
     Returns:
         (target_h, target_w) c_map.
     """
+    warnings.warn(
+        "params_to_c_map is deprecated; use params_to_c_map_scaled and to_physical_sos instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     params = np.asarray(params, dtype=np.float64)
     delta_c0 = np.asarray(delta_c0, dtype=np.float64)
 

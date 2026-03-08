@@ -23,7 +23,7 @@ from tomo.training.stage1_parametrization import (
     params_to_c_map_scaled,
     params_to_smooth_correction,
 )
-from tomo.utils.units import to_physical_sos
+from tomo.utils.units import scaled_delta_to_physical, to_physical_sos
 
 
 def _to_numpy(x: Any) -> np.ndarray:
@@ -183,6 +183,15 @@ def run_stage1a_search(
         diagnostics["c_map_phys_min"] = float(np.min(best_c_map_phys))
         diagnostics["c_map_phys_max"] = float(np.max(best_c_map_phys))
         diagnostics["c_map_phys_mean"] = float(np.mean(best_c_map_phys))
+    if best_tof_pred is not None:
+        diagnostics["tof_pred_mean"] = float(np.mean(best_tof_pred))
+        diagnostics["tof_pred_std"] = float(np.std(best_tof_pred))
+        diagnostics["tof_pred_min"] = float(np.min(best_tof_pred))
+        diagnostics["tof_pred_max"] = float(np.max(best_tof_pred))
+    diagnostics["raw_tof_mean"] = float(np.mean(raw_tof))
+    diagnostics["raw_tof_std"] = float(np.std(raw_tof))
+    diagnostics["raw_tof_min"] = float(np.min(raw_tof))
+    diagnostics["raw_tof_max"] = float(np.max(raw_tof))
 
     return {
         "best_alpha": best_alpha,
@@ -350,9 +359,11 @@ def run_stage1b_search(
         sigma=sigma,
     )
 
-    # Diagnostics: smooth correction, penalties, vs 1A
+    # Diagnostics: smooth correction (scaled and physical), penalties, vs 1A
     smooth_norm = float(np.sqrt(np.sum(best_smooth_correction**2)))
     smooth_max = float(np.max(np.abs(best_smooth_correction)))
+    smooth_correction_phys = scaled_delta_to_physical(best_smooth_correction, min_sos, max_sos)
+    smooth_norm_phys = float(np.sqrt(np.sum(smooth_correction_phys**2)))
     lap = np.zeros_like(best_smooth_correction)
     lap[1:-1, 1:-1] = (
         best_smooth_correction[0:-2, 1:-1]
@@ -368,6 +379,7 @@ def run_stage1b_search(
 
     diagnostics_1b: dict[str, Any] = {
         "smooth_correction_norm": smooth_norm,
+        "smooth_correction_norm_phys": smooth_norm_phys,
         "smooth_correction_max": smooth_max,
         "smoothness_penalty": smoothness_penalty,
         "bounds_penalty": bounds_penalty,

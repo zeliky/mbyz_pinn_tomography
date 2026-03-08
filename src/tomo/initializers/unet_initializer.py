@@ -296,6 +296,8 @@ class UNetInitializer(Initializer):
         c0_physical = torch.from_numpy(c0_physical).to(
             device=c0_normalized.device, dtype=c0_normalized.dtype
         )
+        # Keep 128x128 map for Stage 0/1; flatten only for c_values (graph-based stages)
+        c_map_2d = c0_physical
         c_values = c0_physical.reshape(-1)
         if c_values.shape[0] != self.num_nodes and self.num_nodes > 0:
             if c_values.shape[0] >= self.num_nodes:
@@ -306,4 +308,4 @@ class UNetInitializer(Initializer):
                     (0, self.num_nodes - c_values.shape[0]),
                     value=self.c0_fallback,
                 )
-        return SoSState(c_values=c_values.to(device), step_idx=0)
+        return SoSState(c_values=c_values.to(device), step_idx=0, c_map_2d=c_map_2d.to(device))

@@ -11,6 +11,8 @@ import torch
 from scipy.io import loadmat
 from torch.utils.data import Dataset
 
+from tomo.utils.units import to_scaled_sos
+
 
 def _load_mat(path: str) -> dict[str, Any]:
     """Load a .mat file and return legacy-style dict: x_s, x_r, raw_tof, expanded_tof, sos, tof_maps."""
@@ -147,7 +149,7 @@ class TofDataset(Dataset):
         tof = np.expand_dims(tof_upsampled, axis=0)
 
         sos = mat_data["sos"]
-        normalized_anatomy = (sos - self._min_sos) / (self._max_sos - self._min_sos)
+        normalized_anatomy = to_scaled_sos(sos, self._min_sos, self._max_sos, clamp=True)
         anatomy = np.expand_dims(normalized_anatomy, axis=0)
 
         return {

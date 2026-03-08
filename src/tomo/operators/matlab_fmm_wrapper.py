@@ -21,7 +21,7 @@ except (ImportError, OSError) as e:
 
 
 def forward_tof(
-    sos_map: np.ndarray,
+    sos_map_phys: np.ndarray,
     x_s: np.ndarray,
     x_r: np.ndarray,
     *,
@@ -31,13 +31,12 @@ def forward_tof(
 ) -> np.ndarray:
     """Compute predicted ToF matrix using FMM (forward-only, no gradients).
 
-    Contract: sos_map must be in physical SoS units (e.g. m/s or mm/s). Callers
-    are responsible for converting from scaled/normalized space before calling.
-    scale_factor applies only to the ToF output (to match observed ToF units);
-    it does not scale SoS.
+    Contract: sos_map_phys is in physical SoS units (same as data). scale_factor
+    applies only to the ToF output (to match observed ToF units); it does not
+    scale or interpret SoS. The solver must not infer SoS scaling internally.
 
     Args:
-        sos_map: (H, W) speed of sound in physical units (m/s or same as data).
+        sos_map_phys: (H, W) speed of sound in physical units (m/s or same as data).
         x_s: (S, 2) source positions in grid coordinates (x, y) = (col, row).
         x_r: (R, 2) receiver positions in grid coordinates.
         scale_factor: ToF output scale factor: multiply FMM travel-time output
@@ -54,7 +53,7 @@ def forward_tof(
             "Ensure libmsfm2d.so (Linux) or msfm2d.dll (Windows) is available."
         ) from None
 
-    sos_map = np.asarray(sos_map, dtype=np.float64)
+    sos_map = np.asarray(sos_map_phys, dtype=np.float64)
     x_s = np.asarray(x_s, dtype=np.float64)
     x_r = np.asarray(x_r, dtype=np.float64)
 

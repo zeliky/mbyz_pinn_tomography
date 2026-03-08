@@ -1,4 +1,10 @@
-"""Stage 1 calibration entrypoint: run Stage 1A and Stage 1B."""
+"""Stage 1 calibration entrypoint: run Stage 1A and optionally Stage 1B.
+
+Stage and whether to run 1B are controlled via Hydra config/overrides, e.g.:
+  python -m scripts.train_stage1
+  python -m scripts.train_stage1 run_stage1b=false
+  python -m scripts.train_stage1 training=stage1b
+"""
 
 import sys
 from pathlib import Path
@@ -16,21 +22,12 @@ from tomo.training.stage1_operator_baseline import run_stage1_operator_baseline
 
 
 def main() -> None:
-    config_name = "config_stage1a"
-    run_1b = True
-    if len(sys.argv) > 1:
-        arg = sys.argv[1].lower()
-        if arg in ("stage1a", "1a"):
-            config_name = "config_stage1a"
-            run_1b = False
-        elif arg in ("stage1b", "1b"):
-            config_name = "config_stage1b"
-            run_1b = True
-
     config_dir = str(root / "configs")
     with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(config_name=config_name)
+        # Default: config_stage1a; overrides from CLI e.g. run_stage1b=false, training=stage1b
+        cfg = compose(config_name="config_stage1a", overrides=sys.argv[1:])
 
+    run_stage1b = cfg.get("run_stage1b", True)
     seed = cfg.get("seed", 42)
     torch.manual_seed(seed)
     device_name = cfg.get("device", "cpu")
@@ -42,7 +39,7 @@ def main() -> None:
         full_config,
         device=device,
         max_samples=None,
-        run_stage1b=run_1b,
+        run_stage1b=run_stage1b,
     )
 
     print(f"Processed {summary['num_samples']} samples")

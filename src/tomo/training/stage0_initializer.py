@@ -1,4 +1,9 @@
-"""Stage 0: train initializer only (raw_tof -> 128x128 normalized residual delta_c0)."""
+"""Stage 0: train initializer only (raw_tof -> 128x128 scaled residual delta_c0).
+
+Stage 0 trains in scaled space. c_base_phys is the source of truth (config);
+c_base_scaled is derived at runtime via tomo.utils.units.to_scaled_sos(c_base_phys, min_sos, max_sos).
+The model predicts delta_c0_scaled; the training target is built consistently in scaled space.
+"""
 
 from __future__ import annotations
 
@@ -103,8 +108,8 @@ def run_stage0(
 
     min_sos = data_config["min_sos"]
     max_sos = data_config["max_sos"]
-    c_base = data_config.get("c_base", 1.5)
-    normalized_c_base = normalized_c_base_from_config(min_sos, max_sos, c_base)
+    c_base_phys = data_config.get("c_base_phys", data_config.get("c_base", 1.5))
+    normalized_c_base = normalized_c_base_from_config(min_sos, max_sos, c_base_phys)
 
     dm = TomographyDataModule(data_config)
     dm.setup()
