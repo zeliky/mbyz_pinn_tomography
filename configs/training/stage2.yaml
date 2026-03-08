@@ -1,0 +1,66 @@
+# Stage 2: measurement-aware local refinement policy
+stage: stage2
+
+# Physical SoS bounds (same as Stage 1)
+c_base_phys: 1.5
+c_min_phys: 1.45
+c_max_phys: 1.8
+
+# Stage 1 checkpoint dir (to load c_stage1, tof_pred)
+stage1_checkpoint_dir: checkpoints/stage1b
+checkpoint_dir: checkpoints/stage2
+
+# ROI construction
+roi:
+  tau_delta: 0.02
+  tau_residual: 0.01
+  dilation_iterations: 2
+  support_width: 1
+
+# Graph
+graph:
+  roi_k: 20
+  rcv_k: 15
+  spatial_k: 9
+
+# Policy
+policy:
+  hidden_channels: 32
+  num_heads: 8
+  max_delta: 0.02
+  eta: 0.5
+  action_std_init: 0.1
+
+# Reward
+reward:
+  loss_type: huber
+  delta: 0.01
+  lambda_smooth: 1.0
+  lambda_bounds: 10.0
+  lambda_step: 0.1
+
+# Grid mapper
+grid:
+  sigma: 0.5
+  max_delta: 0.02
+  eta: 0.5
+
+# Episode
+episode:
+  max_steps: 5
+  improvement_threshold: 1.0e-5
+
+# PPO
+ppo:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  update_epochs: 4
+  entropy_coef: 0.01
+  value_coef: 0.5
+  rollout_length: 10
+
+# Training
+max_episodes: 100
+max_samples: null  # null = all validation samples

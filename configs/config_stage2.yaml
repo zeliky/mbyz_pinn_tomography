@@ -1,0 +1,9 @@
+# Stage 2: local refinement policy (load Stage 1 outputs, train PPO).
+defaults:
+  - _self_
+  - data: default
+  - training: stage2
+
+seed: 42
+device: cuda
+experiment_name: stage2_refinement
