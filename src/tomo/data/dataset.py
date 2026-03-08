@@ -67,6 +67,7 @@ class TofDataset(Dataset):
         receivers_amount: int = 32,
         anatomy_width: int = 128,
         anatomy_height: int = 128,
+        index_from_mat_only: bool = False,
     ) -> None:
         super().__init__()
         self._modes = list(modes)
@@ -84,10 +85,27 @@ class TofDataset(Dataset):
         self._receivers_amount = receivers_amount
         self._anatomy_width = anatomy_width
         self._anatomy_height = anatomy_height
+        self._index_from_mat_only = index_from_mat_only
         self._files_index: list[dict[str, Any]] = []
         self._build_files_index()
 
     def _build_files_index(self) -> None:
+        if not os.path.isdir(self._tof_path):
+            self._files_index = []
+            return
+
+        mat_pattern = re.compile(r"ToF(.*)_(\d+)\.mat")
+
+        if self._index_from_mat_only:
+            # Build index from .mat files only; no dependency on PNG filenames.
+            self._files_index = []
+            for file_name in sorted(os.listdir(self._tof_path)):
+                match = mat_pattern.match(file_name)
+                if match:
+                    path = os.path.join(self._tof_path, file_name)
+                    self._files_index.append({"anatomy": None, "tof": None, "mat": path})
+            return
+
         patterns = {
             "anatomy": re.compile(r"anatomy(.*)_(\d+)\.png"),
             "tof": re.compile(r"tof(.*)_(\d+)\.png"),
@@ -105,10 +123,6 @@ class TofDataset(Dataset):
                         if tumor_id not in file_index:
                             file_index[tumor_id] = {"anatomy": None, "tof": None, "mat": None}
                         file_index[tumor_id][key] = os.path.join(base_path, file_name)
-        if not os.path.isdir(self._tof_path):
-            self._files_index = []
-            return
-        mat_pattern = re.compile(r"ToF(.*)_(\d+)\.mat")
         for file_name in os.listdir(self._tof_path):
             match = mat_pattern.match(file_name)
             if match:

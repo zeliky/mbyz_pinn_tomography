@@ -13,17 +13,15 @@ import torch.nn.functional as F
 from tomo.initializers.base import Initializer
 from tomo.state.observation import Observation
 from tomo.state.sos_state import SoSState
+from tomo.utils.units import to_physical_sos, to_scaled_sos
 
 
 def normalized_c_base_from_config(min_sos: float, max_sos: float, c_base: float) -> float:
-    """Compute normalized baseline in [0, 1] from physical c_base and SOS range."""
-    return float(
-        torch.clamp(
-            torch.tensor((c_base - min_sos) / (max_sos - min_sos)),
-            0.0,
-            1.0,
-        ).item()
-    )
+    """Compute normalized baseline in [0, 1] from physical c_base and SOS range.
+
+    Uses same mapping as tomo.utils.units.to_scaled_sos (clamped to [0, 1]).
+    """
+    return float(to_scaled_sos(c_base, min_sos, max_sos, clamp=True))
 
 
 def delta_target_from_anatomy(
@@ -292,7 +290,12 @@ class UNetInitializer(Initializer):
             delta_pred = self._net(raw_tof)
         norm_base = self._get_normalized_c_base()
         c0_normalized = c0_normalized_from_delta(norm_base, delta_pred)
-        c0_physical = self._min_sos + c0_normalized * (self._max_sos - self._min_sos)
+        c0_physical = to_physical_sos(
+            c0_normalized.cpu().numpy(), self._min_sos, self._max_sos
+        )
+        c0_physical = torch.from_numpy(c0_physical).to(
+            device=c0_normalized.device, dtype=c0_normalized.dtype
+        )
         c_values = c0_physical.reshape(-1)
         if c_values.shape[0] != self.num_nodes and self.num_nodes > 0:
             if c_values.shape[0] >= self.num_nodes:

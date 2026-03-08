@@ -1,9 +1,73 @@
-"""Stage 1 parametrization: alpha (1A) and alpha + smooth correction (1B)."""
+"""Stage 1 parametrization: alpha (1A) and alpha + smooth correction (1B).
+
+Physical-space: params_to_c_map (c_base, delta_c0 in physical units).
+Scaled-space: params_to_c_map_scaled (c_base_scaled, delta_c0_scaled in [0,1]).
+Call sites must convert c_map_scaled to physical via to_physical_sos before the solver.
+"""
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, zoom
+
+
+def params_to_c_map_scaled(
+    params: np.ndarray,
+    c_base_scaled: float,
+    delta_c0_scaled: np.ndarray,
+    stage: str,
+    *,
+    grid_h: int = 8,
+    grid_w: int = 8,
+    target_h: int = 128,
+    target_w: int = 128,
+    apply_gaussian: bool = False,
+    sigma: float = 0.5,
+) -> np.ndarray:
+    """Convert search parameters to c_map in scaled space [0, 1].
+
+    Stage 1A: c_map_scaled = c_base_scaled + alpha * delta_c0_scaled.
+    Stage 1B: same + smooth_correction (in scaled units).
+
+    Callers must convert to physical before the forward solver:
+    c_map_phys = to_physical_sos(c_map_scaled, min_sos, max_sos).
+
+    Args:
+        params: [alpha] for stage1a, [alpha, z...] for stage1b.
+        c_base_scaled: Baseline in [0, 1] (from to_scaled_sos(c_base_phys, ...)).
+        delta_c0_scaled: (H, W) residual in scaled space (from physical_delta_to_scaled).
+        stage: "stage1a" or "stage1b".
+        grid_h, grid_w, target_h, target_w, apply_gaussian, sigma: As in params_to_c_map.
+
+    Returns:
+        (target_h, target_w) c_map in [0, 1].
+    """
+    params = np.asarray(params, dtype=np.float64)
+    delta_c0_scaled = np.asarray(delta_c0_scaled, dtype=np.float64)
+
+    if delta_c0_scaled.ndim != 2:
+        raise ValueError(f"delta_c0_scaled must be 2D, got shape {delta_c0_scaled.shape}")
+
+    if delta_c0_scaled.shape != (target_h, target_w):
+        zoom_factors = (target_h / delta_c0_scaled.shape[0], target_w / delta_c0_scaled.shape[1])
+        delta_c0_scaled = zoom(delta_c0_scaled, zoom_factors, order=1)
+
+    alpha = float(params[0])
+    c_map = c_base_scaled + alpha * delta_c0_scaled
+
+    if stage == "stage1b" and len(params) > 1:
+        n_z = grid_h * grid_w
+        z = params[1 : 1 + n_z]
+        if len(z) < n_z:
+            z = np.pad(z, (0, n_z - len(z)), constant_values=0)
+        z = z[:n_z].reshape(grid_h, grid_w)
+        zoom_factors = (target_h / grid_h, target_w / grid_w)
+        smooth_correction = zoom(z, zoom_factors, order=1)
+        if apply_gaussian:
+            smooth_correction = gaussian_filter(smooth_correction, sigma=sigma, mode="nearest")
+        c_map = c_map + smooth_correction
+
+    return np.clip(c_map, 0.0, 1.0)
 
 
 def params_to_c_map(
@@ -44,8 +108,6 @@ def params_to_c_map(
         raise ValueError(f"delta_c0 must be 2D, got shape {delta_c0.shape}")
 
     if delta_c0.shape != (target_h, target_w):
-        from scipy.ndimage import zoom
-
         zoom_factors = (target_h / delta_c0.shape[0], target_w / delta_c0.shape[1])
         delta_c0 = zoom(delta_c0, zoom_factors, order=1)
 
@@ -58,9 +120,6 @@ def params_to_c_map(
         if len(z) < n_z:
             z = np.pad(z, (0, n_z - len(z)), constant_values=0)
         z = z[:n_z].reshape(grid_h, grid_w)
-
-        from scipy.ndimage import zoom
-
         zoom_factors = (target_h / grid_h, target_w / grid_w)
         smooth_correction = zoom(z, zoom_factors, order=1)
 
@@ -112,8 +171,6 @@ def params_to_smooth_correction(
     if len(z) < n_z:
         z = np.pad(z, (0, n_z - len(z)), constant_values=0)
     z = z[:n_z].reshape(grid_h, grid_w)
-    from scipy.ndimage import zoom
-
     zoom_factors = (target_h / grid_h, target_w / grid_w)
     smooth = zoom(z, zoom_factors, order=1)
     if apply_gaussian:

@@ -1,10 +1,10 @@
 stage: stage1b
 
-# Physical SoS bounds (same units as data min_sos/max_sos)
-# Example: 1500/1450/1800 for mm/s; use 1.5/1.45/1.8 if data uses 0.1-2.1 range
-c_base_phys: 1500.0
-c_min_phys: 1450.0
-c_max_phys: 1800.0
+# Physical SoS bounds (must match data min_sos/max_sos units)
+# For data default (min_sos=0.1, max_sos=2.1) use 1.5/1.45/1.8; for mm/s use 1500/1450/1800
+c_base_phys: 1.5
+c_min_phys: 1.45
+c_max_phys: 1.8
 
 # Stage 0 checkpoint
 checkpoint_path: checkpoints/stage0/best.pt
@@ -35,3 +35,6 @@ loss:
   w_anchor: 0.1
 
 scale_factor: 1.0
+
+# Which data split to use for calibration: train | validation | test
+loader_split: validation

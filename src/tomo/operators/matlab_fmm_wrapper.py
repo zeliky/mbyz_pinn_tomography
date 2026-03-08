@@ -31,11 +31,17 @@ def forward_tof(
 ) -> np.ndarray:
     """Compute predicted ToF matrix using FMM (forward-only, no gradients).
 
+    Contract: sos_map must be in physical SoS units (e.g. m/s or mm/s). Callers
+    are responsible for converting from scaled/normalized space before calling.
+    scale_factor applies only to the ToF output (to match observed ToF units);
+    it does not scale SoS.
+
     Args:
-        sos_map: (H, W) speed of sound in m/s (or same units as observed ToF).
+        sos_map: (H, W) speed of sound in physical units (m/s or same as data).
         x_s: (S, 2) source positions in grid coordinates (x, y) = (col, row).
         x_r: (R, 2) receiver positions in grid coordinates.
-        scale_factor: Multiply FMM output by this to match observed ToF units.
+        scale_factor: ToF output scale factor: multiply FMM travel-time output
+            by this to match observed ToF units. SoS must already be physical.
         use_second: Use second-order approximations in msfm2d.
         use_cross: Use cross derivatives in msfm2d.
 

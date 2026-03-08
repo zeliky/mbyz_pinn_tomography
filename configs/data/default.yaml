@@ -11,5 +11,8 @@ c_base: 1.5  # physical fluid speed (same units as min_sos/max_sos) for residual
 min_tof: 0.0
 max_tof: 1000.0
 
+# If true, build dataset index from .mat files only (no PNG anatomy/tof filenames required)
+index_from_mat_only: false
+
 batch_size: 4
 num_workers: 0

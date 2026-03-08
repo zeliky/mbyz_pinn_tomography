@@ -53,6 +53,7 @@ class TomographyDataModule:
             "receivers_amount": c.get("receivers_amount", 32),
             "anatomy_width": c.get("anatomy_width", 128),
             "anatomy_height": c.get("anatomy_height", 128),
+            "index_from_mat_only": c.get("index_from_mat_only", False),
         }
 
     def setup(self) -> None:
