@@ -23,3 +23,46 @@ Existing logic lives under **src/original/** (git shows deleted `src/*` with cou
 
 - **Graph schema mismatch**: `src/original/RL/env/wave_solver.py` expects `data.edge_attr` (distances as `[E, 1]`); `GraphDataset.get_graph()` in `network.py` does not set `edge_attr` (only `x`, `edge_index`, `pos`). The new `data/graph_builder.py` (or `edge_features.py`) must compute and attach `edge_attr` so one schema works for both operator and RL.
 - **FMM in two places**: `FMMMessagePassing` in `gat.py` holds SoS as `nn.Parameter`; RL `wave_solver.py` passes T, c, pos, edge_index (and edge_attr). The new operator should be stateless: SoS comes from `SoSState`, not from the operator module.
+
+## Audit 2026-03-20 (current `src/tomo` status)
+
+### What is implemented in `src/tomo`
+- Operator core exists:
+  - `src/tomo/operators/propagation.py` implements `FMMPropagation` as a `MessagePassing` module using min-style aggregation (`aggr="min"`).
+  - `src/tomo/operators/gat_fmm_operator.py` implements `GATFMMOperator` as an `Operator` that runs iterative FMM-style propagation driven by SoS extracted from `SoSState`.
+- Initializers exist:
+  - `src/tomo/initializers/constant_init.py` (constant SoS baseline).
+  - `src/tomo/initializers/unet_initializer.py` (SRInitializerNet + UNetInitializer wrapper producing `SoSState`).
+- Policies exist:
+  - `src/tomo/policies/null_policy.py` (zero delta).
+  - `src/tomo/policies/gnn_policy.py` (mesh-node delta updates).
+  - `src/tomo/policies/rl_wrapper.py` includes PPO-style wrappers (`TomoEnv`, `RLPolicyAdapter`).
+- Unified orchestration exists:
+  - `src/tomo/systems/tomography_system.py` implements `TomographySystem` with:
+    - `run_one_step()`: operator -> error -> policy -> `SoSState.apply()`
+    - `rollout()`: optional initializer -> repeated rollout steps
+- Training scaffolding exists:
+  - `src/tomo/training/trainer.py` implements `Trainer.train_step()` (rollout -> objective -> backward -> step).
+
+### Known misalignments vs the master plan
+1. Stage2 bypasses the unified `TomographySystem` execution flow
+   - `src/tomo/stage2/*` and `scripts/train_stage2.py` provide a separate Stage2 RL implementation.
+   - `src/tomo/stage2/stage2_env.py` calls `src/tomo/operators/matlab_fmm_wrapper.py::forward_tof()` directly and updates a local `c_current`, without using:
+     - `SoSState`
+     - `TomographySystem`
+     - the unified `operator(state, observation_graph)` contract.
+
+2. Stage1 “operator baseline” is actually derivative-free calibration search
+   - `src/tomo/training/stage1_operator_baseline.py` + `src/tomo/training/stage1_search.py` perform derivative-free optimization via `forward_tof()` oracle calls.
+   - This is not the intended Phase-4/Phase-6 style “operator-centric” training pipeline under `TomographySystem`.
+
+3. Duplicate policy/trainer concepts for PPO exist
+   - Unified RL wrapper: `src/tomo/policies/rl_wrapper.py`
+   - Separate Stage2 PPO: `src/tomo/stage2/stage2_policy.py`, `src/tomo/stage2/stage2_trainer.py`
+
+### Immediate guidance for later agents
+- Treat the unified contract modules as the source of truth:
+  - `src/tomo/systems/tomography_system.py`
+  - `src/tomo/operators/*` (operator only)
+  - `src/tomo/policies/*` (delta updates)
+- Treat `src/tomo/stage2/*` as a legacy/migration-era implementation until it is integrated or archived.
