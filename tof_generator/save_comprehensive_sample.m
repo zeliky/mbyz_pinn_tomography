@@ -38,7 +38,7 @@ function save_comprehensive_sample(data, cfg, label)
         D.metadata.grid_size = size(data.Vt, 1);
         D.metadata.num_sensors = size(x_s, 1);
         D.metadata.timestamp = datestr(now);
-        save(filename, '-struct', 'D', '-v7.3');
+        save(filename, '-struct', 'D', '-v7');
         return
     end
 
@@ -61,5 +61,5 @@ function save_comprehensive_sample(data, cfg, label)
     D.metadata.num_sensors = size(D.x_s, 1);
     D.metadata.timestamp = datestr(now);
 
-    save(filename, '-struct', 'D', '-v7.3');
+    save(filename, '-struct', 'D', '-v7');
 end
