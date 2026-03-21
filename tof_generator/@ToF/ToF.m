@@ -28,6 +28,7 @@ classdef ToF < handle
         fig1, fig2, fig3;
         fig1_name, fig2_name, fig3_name;
         font_size;
+        verbose = true;  % set false in cfg for silent sweeps
     end
     
     methods
@@ -37,25 +38,49 @@ classdef ToF < handle
             set(0, 'DefaultAxesFontSize', this.font_size);
             set(0, 'DefaultTextFontSize', this.font_size);
             
+            if isfield(cfg, 'verbose')
+                this.verbose = logical(cfg.verbose);
+            else
+                this.verbose = true;
+            end
+            
+            imSz = 128;
+            if isfield(cfg, 'imSize') && ~isempty(cfg.imSize)
+                imSz = cfg.imSize;
+            end
             % Grid Defaults
-            this.m = cfg.imSize; 
-            this.n = cfg.imSize;
+            this.m = imSz;
+            this.n = imSz;
             this.x = linspace(1, this.m, this.m);
             this.y = linspace(1, this.n, this.n);
             this.z = 1;
             this.margin = 10;
             
             % Sensor Defaults
-            this.number_of_sources = cfg.num_sensors;
-            this.number_of_receivers = cfg.num_receivers;
+            ns = 64;
+            nr = 64;
+            if isfield(cfg, 'num_sensors') && ~isempty(cfg.num_sensors)
+                ns = cfg.num_sensors;
+            end
+            if isfield(cfg, 'num_receivers') && ~isempty(cfg.num_receivers)
+                nr = cfg.num_receivers;
+            else
+                nr = ns;
+            end
+            this.number_of_sources = ns;
+            this.number_of_receivers = nr;
             this.max_angle = 2*pi;
             this.min_angle = 0;
             
-            % Physics Constants (mm/us)
-            this.c0 = 1.480; % Water/Background
-            this.c  = 1.540; % Healthy
-            this.c1 = 1.450; % Fat
-            this.c2 = 1.580; % Tumor
+            % Physics Constants (mm/us) — defaults; override via cfg from runAnatomy
+            this.c0 = 1.480;
+            this.c  = 1.540;
+            this.c1 = 1.450;
+            this.c2 = 1.580;
+            if isfield(cfg, 'sos_background'), this.c0 = cfg.sos_background; end
+            if isfield(cfg, 'sos_healthy'),   this.c  = cfg.sos_healthy; end
+            if isfield(cfg, 'sos_fat'),       this.c1 = cfg.sos_fat; end
+            if isfield(cfg, 'sos_tumor_mean'), this.c2 = cfg.sos_tumor_mean; end
             
             this.setReceiversAndSources();
             
@@ -111,7 +136,9 @@ classdef ToF < handle
             tmap_all = zeros(this.number_of_sources, this.n, this.m);
             v_for_plot = [];
             
-            fprintf('Running Eikonal for %d sources...\n', this.number_of_sources);
+            if this.verbose
+                fprintf('Running Eikonal for %d sources...\n', this.number_of_sources);
+            end
             for is = 1:this.number_of_sources
                 % Define source position for this iteration
                 S_current = [ones(this.number_of_receivers, 1) * this.xs_sources(is), ...
