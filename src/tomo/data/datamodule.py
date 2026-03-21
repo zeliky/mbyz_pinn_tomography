@@ -38,6 +38,8 @@ class TomographyDataModule:
             "max_sos": c["max_sos"],
             "min_tof": c["min_tof"],
             "max_tof": c["max_tof"],
+            "min_tof_diff": c["min_tof_diff"],
+            "max_tof_diff": c["max_tof_diff"],
             "sources_amount": c.get("sources_amount", 32),
             "receivers_amount": c.get("receivers_amount", 32),
             "anatomy_width": c.get("anatomy_width", 128),

@@ -28,7 +28,7 @@ D_NUMERIC_KEYS = (
 D_OPTIONAL_MAP_KEYS = ("tof_maps_tumor", "tof_maps_healthy", "tof_maps_diff")
 
 # Populated in __getitem__ (not stored in .mat).
-DERIVED_KEYS = ("sos_map_normalized", "tof_tumor_normalized_grid")
+DERIVED_KEYS = ("sos_map_normalized", "tof_tumor_normalized_grid", "tof_diff_normalized")
 
 SAMPLE_KEYS = D_NUMERIC_KEYS + D_OPTIONAL_MAP_KEYS + DERIVED_KEYS
 
@@ -92,6 +92,8 @@ class TofDataset(Dataset):
         max_sos: float,
         min_tof: float,
         max_tof: float,
+        min_tof_diff: float,
+        max_tof_diff: float,
         sources_amount: int = 32,
         receivers_amount: int = 32,
         anatomy_width: int = 128,
@@ -104,6 +106,8 @@ class TofDataset(Dataset):
         self._max_sos = max_sos
         self._min_tof = min_tof
         self._max_tof = max_tof
+        self._min_tof_diff = min_tof_diff
+        self._max_tof_diff = max_tof_diff
         self._sources_amount = sources_amount
         self._receivers_amount = receivers_amount
         self._anatomy_width = anatomy_width
@@ -180,6 +184,17 @@ class TofDataset(Dataset):
         sos_norm = to_scaled_sos(sos, self._min_sos, self._max_sos, clamp=True)
         sos_map_normalized = np.expand_dims(sos_norm, axis=0)
 
+        td = mat_np["tof_diff_raw"]
+        if td.size == 0:
+            raise ValueError(
+                f"Missing tof_diff_raw in {entry['mat']} (need full save; mat_minimal is unsupported for training)."
+            )
+        denom_diff = self._max_tof_diff - self._min_tof_diff
+        if denom_diff <= 0:
+            raise ValueError("max_tof_diff must be greater than min_tof_diff")
+        normalized_diff = (td - self._min_tof_diff) / denom_diff
+        tof_diff_normalized = np.expand_dims(normalized_diff, axis=0)
+
         out: dict[str, Any] = {}
         for key in D_NUMERIC_KEYS + D_OPTIONAL_MAP_KEYS:
             out[key] = torch.as_tensor(mat_np[key], dtype=torch.float32)
@@ -187,4 +202,5 @@ class TofDataset(Dataset):
         out["tof_tumor_normalized_grid"] = torch.as_tensor(
             tof_tumor_normalized_grid, dtype=torch.float32
         )
+        out["tof_diff_normalized"] = torch.as_tensor(tof_diff_normalized, dtype=torch.float32)
         return out

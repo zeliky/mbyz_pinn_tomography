@@ -23,6 +23,8 @@ def _default_data_config() -> dict:
         "max_sos": 2.1,
         "min_tof": 0.0,
         "max_tof": 1000.0,
+        "min_tof_diff": -1.0,
+        "max_tof_diff": 1.0,
         "batch_size": 2,
         "num_workers": 0,
     }
@@ -38,11 +40,14 @@ def test_tof_dataset_shapes() -> None:
         max_sos=cfg["max_sos"],
         min_tof=cfg["min_tof"],
         max_tof=cfg["max_tof"],
+        min_tof_diff=cfg["min_tof_diff"],
+        max_tof_diff=cfg["max_tof_diff"],
     )
     if len(dataset) == 0:
         pytest.skip("no MAT data found (missing or empty data dir)")
     sample = dataset[0]
     assert sample["tof_tumor_normalized_grid"].shape[0] == 1
+    assert sample["tof_diff_normalized"].shape[0] == 1
     assert sample["sos_map_normalized"].shape[0] == 1
     for key in TofDataset.SAMPLE_KEYS:
         assert key in sample, f"missing key {key}"

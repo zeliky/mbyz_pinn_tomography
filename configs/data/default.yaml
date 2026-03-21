@@ -12,6 +12,8 @@ c_base_phys: 1.5  # physical fluid speed (same units as min_sos/max_sos); c_base
 c_base: 1.5
 min_tof: 0.0
 max_tof: 1000.0
+min_tof_diff: -1.0
+max_tof_diff: 1.0
 
 batch_size: 4
 num_workers: 0

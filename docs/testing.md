@@ -8,7 +8,7 @@ Help later agents answer:
 
 This repo currently has a small set of unit and smoke tests. Some tests depend on:
 - The native FMM solver (`py2mat.msfm2d` / `msfm2d`)
-- Availability of MATLAB-generated datasets: symlink repo-root `inputData` to `dataset_<date>_<tag>/` (see `tof_generator/runProduction1.m`). After `runProduction1`, MATLAB writes `normalization.json` at the dataset root (global min/max of `sos_map` and `tof_tumor_raw` over train/validate/test). Python `data.normalization_source`: `auto` uses that file when present, `dataset` requires it, `config` uses only YAML bounds. Using stats over all splits is convenient but introduces mild leakage vs train-only stats; see `configs/data/default.yaml`.
+- Availability of MATLAB-generated datasets: symlink repo-root `inputData` to `dataset_<date>_<tag>/` (see `tof_generator/runProduction1.m`). After `runProduction1`, MATLAB writes `normalization.json` at the dataset root (global min/max of `sos_map`, `tof_tumor_raw`, and `tof_diff_raw` over train/validate/test). Regenerate this file after updating the MATLAB writer; older manifests without `min_tof_diff` / `max_tof_diff` will not load under `auto`/`dataset`. Python `data.normalization_source`: `auto` uses that file when present, `dataset` requires it, `config` uses only YAML bounds. Using stats over all splits is convenient but introduces mild leakage vs train-only stats; see `configs/data/default.yaml`.
 
 ## How to run
 - From repo root:

@@ -25,6 +25,8 @@ def test_stage1_preflight_fails_when_checkpoint_missing() -> None:
             "max_sos": 2.1,
             "min_tof": 0.0,
             "max_tof": 1000.0,
+            "min_tof_diff": -1.0,
+            "max_tof_diff": 1.0,
             "batch_size": 2,
             "num_workers": 0,
         },

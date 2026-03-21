@@ -5,7 +5,7 @@ function save_comprehensive_sample(data, cfg, label)
     %   Batch keys mirroring D: tof_tumor_raw, sos_map, tof_healthy_raw, tof_diff_raw,
     %   sos_healthy_base, tumor_mask, x_s, x_r, and when saved: tof_maps_tumor,
     %   tof_maps_healthy, tof_maps_diff. Nested metadata.* may appear flattened in loadmat.
-    %   Derived in TofDataset (not in file): sos_map_normalized, tof_tumor_normalized_grid.
+    %   Derived in TofDataset (not in file): sos_map_normalized, tof_tumor_normalized_grid, tof_diff_normalized.
     % mat_minimal branch omits tumor/healthy ToF grids and maps; use full saves for Stage 0/1.
     %
     % data: Vh, Vt, Mask, th, tt, tdiff; x_s/x_r (sensor matrices) or tof_obj (ToF handle)

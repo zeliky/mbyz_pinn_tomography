@@ -1,7 +1,7 @@
 function write_dataset_normalization_metadata(output_root)
     % WRITE_DATASET_NORMALIZATION_METADATA  Scan all comprehensive .mat files and write normalization.json.
     %
-    % Reads sos_map and tof_tumor_raw (same fields as save_comprehensive_sample / Python TofDataset).
+    % Reads sos_map, tof_tumor_raw, tof_diff_raw (same fields as save_comprehensive_sample / Python TofDataset).
     % Global min/max over train, validate, and test splits. Python loads this file from data_root.
     %
     % Scope 'all_splits': mild information leakage into val/test for the scaler (documented in docs).
@@ -11,6 +11,10 @@ function write_dataset_normalization_metadata(output_root)
     maxSos = -inf;
     minTof = inf;
     maxTof = -inf;
+    minTofDiff = inf;
+    maxTofDiff = -inf;
+    gotTumorTof = false;
+    gotDiffTof = false;
     nFiles = 0;
 
     for si = 1:numel(splits)
@@ -25,7 +29,7 @@ function write_dataset_normalization_metadata(output_root)
             end
             p = fullfile(matDir, d(k).name);
             try
-                S = load(p, 'sos_map', 'tof_tumor_raw');
+                S = load(p, 'sos_map', 'tof_tumor_raw', 'tof_diff_raw');
             catch ME
                 warning('TOF:NormMetaLoad', 'Skipping %s: %s', p, ME.message);
                 continue;
@@ -42,8 +46,18 @@ function write_dataset_normalization_metadata(output_root)
                 v = S.tof_tumor_raw(:);
                 v = v(isfinite(v));
                 if ~isempty(v)
+                    gotTumorTof = true;
                     minTof = min(minTof, min(v));
                     maxTof = max(maxTof, max(v));
+                end
+            end
+            if isfield(S, 'tof_diff_raw')
+                v = S.tof_diff_raw(:);
+                v = v(isfinite(v));
+                if ~isempty(v)
+                    gotDiffTof = true;
+                    minTofDiff = min(minTofDiff, min(v));
+                    maxTofDiff = max(maxTofDiff, max(v));
                 end
             end
             nFiles = nFiles + 1;
@@ -53,6 +67,14 @@ function write_dataset_normalization_metadata(output_root)
     if nFiles == 0
         error('TOF:NoMatFiles', ...
             'No readable .mat files found under %s; cannot write normalization.json.', output_root);
+    end
+    if ~gotDiffTof
+        error('TOF:NoTofDiff', ...
+            'No finite tof_diff_raw found in any .mat under %s; cannot write diff ToF bounds.', output_root);
+    end
+    if ~gotTumorTof
+        error('TOF:NoTofTumor', ...
+            'No finite tof_tumor_raw found in any .mat under %s; cannot write tumor ToF bounds.', output_root);
     end
 
     epsTol = 1e-9;
@@ -64,6 +86,10 @@ function write_dataset_normalization_metadata(output_root)
         minTof = double(minTof) - epsTol;
         maxTof = double(maxTof) + epsTol;
     end
+    if maxTofDiff <= minTofDiff
+        minTofDiff = double(minTofDiff) - epsTol;
+        maxTofDiff = double(maxTofDiff) + epsTol;
+    end
 
     meta = struct( ...
         'version', 1, ...
@@ -71,7 +97,9 @@ function write_dataset_normalization_metadata(output_root)
         'max_sos', maxSos, ...
         'min_tof', minTof, ...
         'max_tof', maxTof, ...
-        'fields', struct('sos', 'sos_map', 'tof', 'tof_tumor_raw'), ...
+        'min_tof_diff', minTofDiff, ...
+        'max_tof_diff', maxTofDiff, ...
+        'fields', struct('sos', 'sos_map', 'tof', 'tof_tumor_raw', 'tof_diff', 'tof_diff_raw'), ...
         'scope', 'all_splits', ...
         'num_mat_files', nFiles);
 

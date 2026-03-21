@@ -74,7 +74,7 @@ def test_stage0_one_step_backward_residual() -> None:
     normalized_c_base = normalized_c_base_from_config(0.1, 2.1, 1.5)
     anatomy = torch.rand(2, 1, 128, 128)
     batch = {
-        "tof_tumor_raw": torch.randn(2, 32, 32),
+        "tof_diff_normalized": torch.rand(2, 1, 32, 32),
         "sos_map_normalized": anatomy,
     }
     device = torch.device("cpu")

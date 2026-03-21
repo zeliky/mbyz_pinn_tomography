@@ -1,5 +1,6 @@
-"""Stage 0: train initializer only (tof_tumor_raw -> 128x128 scaled residual delta_c0).
+"""Stage 0: train initializer only (normalized diff ToF -> 128x128 scaled residual delta_c0).
 
+Input is `tof_diff_normalized` from the dataset (global min/max over `tof_diff_raw`).
 Stage 0 trains in scaled space. c_base_phys is the source of truth (config);
 c_base_scaled is derived at runtime via tomo.utils.units.to_scaled_sos(c_base_phys, min_sos, max_sos).
 The model predicts delta_c0_scaled; the training target is built consistently in scaled space.
@@ -26,13 +27,13 @@ from tomo.initializers.unet_initializer import (
 from tomo.utils.logging import EpochMetricsLogger, HtmlTrainingReport, setup_training_logging
 
 
-def _ensure_tof_tumor_4d(tof_tumor_raw: torch.Tensor) -> torch.Tensor:
-    """Ensure tof_tumor_raw batch is [B, 1, H, W] for the SR model."""
-    if tof_tumor_raw.dim() == 2:
-        return tof_tumor_raw.unsqueeze(0).unsqueeze(0)
-    if tof_tumor_raw.dim() == 3:
-        return tof_tumor_raw.unsqueeze(1)
-    return tof_tumor_raw
+def _ensure_tof_tumor_4d(tof_map: torch.Tensor) -> torch.Tensor:
+    """Ensure ToF map batch is [B, 1, H, W] for the SR model (raw tumor or normalized diff)."""
+    if tof_map.dim() == 2:
+        return tof_map.unsqueeze(0).unsqueeze(0)
+    if tof_map.dim() == 3:
+        return tof_map.unsqueeze(1)
+    return tof_map
 
 
 def _get_criterion(loss_name: str) -> nn.Module:
@@ -56,7 +57,7 @@ def _train_epoch(
     total_mse_recon = 0.0
     n = 0
     for batch in loader:
-        tof_in = _ensure_tof_tumor_4d(batch["tof_tumor_raw"]).to(device)
+        tof_in = _ensure_tof_tumor_4d(batch["tof_diff_normalized"]).to(device)
         sos_norm = batch["sos_map_normalized"].to(device)
         delta_target = delta_target_from_anatomy(sos_norm, normalized_c_base)
         optimizer.zero_grad()
@@ -85,7 +86,7 @@ def _validate(
     total_mse_recon = 0.0
     n = 0
     for batch in loader:
-        tof_in = _ensure_tof_tumor_4d(batch["tof_tumor_raw"]).to(device)
+        tof_in = _ensure_tof_tumor_4d(batch["tof_diff_normalized"]).to(device)
         sos_norm = batch["sos_map_normalized"].to(device)
         delta_target = delta_target_from_anatomy(sos_norm, normalized_c_base)
         delta_pred = model(tof_in)
@@ -104,7 +105,7 @@ def run_stage0(
     device: torch.device | None = None,
 ) -> str | None:
     """
-    Run Stage 0 training: train SR initializer on tof_tumor_raw -> delta_c0 (residual).
+    Run Stage 0 training: train SR initializer on tof_diff_normalized -> delta_c0 (residual).
     Target: delta_target = clamp(anatomy - normalized_c_base, 0, 1). Loss on residual.
     Returns path to best checkpoint, or None if no checkpoint saved.
     """

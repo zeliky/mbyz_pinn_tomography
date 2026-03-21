@@ -8,7 +8,14 @@ from typing import Any
 
 MANIFEST_NAME = "normalization.json"
 
-BOUND_KEYS = ("min_sos", "max_sos", "min_tof", "max_tof")
+BOUND_KEYS = (
+    "min_sos",
+    "max_sos",
+    "min_tof",
+    "max_tof",
+    "min_tof_diff",
+    "max_tof_diff",
+)
 
 
 def normalization_manifest_path(data_root: str) -> Path:
@@ -16,7 +23,7 @@ def normalization_manifest_path(data_root: str) -> Path:
 
 
 def load_normalization_bounds(data_root: str) -> dict[str, float]:
-    """Read normalization.json; return min_sos, max_sos, min_tof, max_tof as floats."""
+    """Read normalization.json; return SOS, tumor ToF, and diff ToF min/max as floats."""
     path = normalization_manifest_path(data_root)
     if not path.is_file():
         raise FileNotFoundError(
@@ -37,6 +44,11 @@ def load_normalization_bounds(data_root: str) -> dict[str, float]:
     if out["max_tof"] <= out["min_tof"]:
         raise ValueError(
             f"Invalid ToF bounds in {path}: max_tof ({out['max_tof']}) must exceed min_tof ({out['min_tof']})."
+        )
+    if out["max_tof_diff"] <= out["min_tof_diff"]:
+        raise ValueError(
+            f"Invalid diff ToF bounds in {path}: max_tof_diff ({out['max_tof_diff']}) "
+            f"must exceed min_tof_diff ({out['min_tof_diff']})."
         )
     return out
 
