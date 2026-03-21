@@ -42,8 +42,14 @@ end
     
 
 if type==1
-    % FAST MARCHING
-    
+    % FAST MARCHING — msfm() dispatches to msfm2d_choose → msfm2d MEX when
+    % exist('msfm2d','file')==3 (see fast_marching_kroon/msfm.m). Check with: which msfm2d
+    ev = lower(strtrim(getenv('TOF_ASSERT_MSFM_MEX')));
+    if ismember(ev, {'1', 'true', 'yes'}) && (exist('msfm2d', 'file') ~= 3)
+        error('TOF:eikonal:MexRequired', ...
+            'TOF_ASSERT_MSFM_MEX is set but msfm2d MEX not on path (which msfm2d).');
+    end
+
     SourcesUnique=unique(Sources,'rows');
     nu=size(SourcesUnique,1);
     if nu<ns
@@ -57,7 +63,7 @@ if type==1
         return
     end
     
-    % CONVERT TO INDEX LOCATIONS
+    % CONVERT TO INDEX LOCATIONS (recomputed each call; static when x,y,z,dx and Sources are static)
     Sources_ind=Sources.*0;
     for j=1:size(Sources,2);
        if j==1; Sources_ind(:,j)=((Sources(:,j)-x(1))./dx)+1;end
@@ -75,6 +81,7 @@ if type==1
         S(1)=Sources_ind(is,2);
         S(2)=Sources_ind(is,1);
         %
+        % msfm → msfm2d MEX (e.g. msfm2d.mexw64 / .mexa64) when compiled; else MATLAB fallback.
         [tmap(:,:,:,is)]=msfm(V, round(S'), true, true).*dx;
     end
    

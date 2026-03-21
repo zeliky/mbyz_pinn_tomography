@@ -40,15 +40,10 @@ classdef Anatomy < handle
         end
         function [V] = addTiltedEllipse(this, V)
             [ex, ey] = ellipse(this.ra, this.rb, this.ang, this.x0, this.y0);
-            x = this.x; y = this.y;
-            inPoints = this.polygrid(ex, ey);
-            u = inPoints(:, 1); v = inPoints(:, 2);
-            for i = 1:length(u)
-                k = find(x==u(i));
-                l = find(y==v(i));
-                V(k,l)=this.value;
-            end
-%             fill(ex, ey, [this.R,this.G,this.B], 'EdgeColor', [this.R,this.G,this.B])
+            % V(k,l) is speed at (x(k), y(l)) — ndgrid matches that indexing.
+            [X, Y] = ndgrid(this.x(:), this.y(:));
+            mask = inpolygon(X, Y, ex, ey);
+            V(mask) = this.value;
         end
         function chooseGridSize(this, m, n)
             this.m = m;
@@ -56,30 +51,6 @@ classdef Anatomy < handle
             this.x = linspace(1,this.m,this.m);
             this.y = linspace(1,this.n,this.n);
             this.z=1;
-        end
-        function [inPoints] = polygrid(this, xv, yv)
-        % https://www.mathworks.com/matlabcentral/mlc-downloads/downloads/submissions/41454/versions/9/previews/polygrid.m/index.html
-        % https://www.mathworks.com/matlabcentral/fileexchange/41454-grid-of-points-within-a-polygon
-        x = this.x; y = this.y;
-        %Find the bounding rectangle
-            lower_x = 1; %min(xv);
-            higher_x = max(xv);
-
-            lower_y = 1; %min(yv);
-            higher_y = max(yv);
-        %Create a grid of points within the bounding rectangle
-            inc_x = x(2)-x(1); %1/N;
-            inc_y = y(2)-y(1); %1/N;
-
-            interval_x = lower_x:inc_x:higher_x;
-            interval_y = lower_y:inc_y:higher_y;
-
-            [bigGridX, bigGridY] = meshgrid(interval_x, interval_y);
-
-        %Filter grid to get only points in polygon
-            in = inpolygon(bigGridX(:), bigGridY(:), xv, yv);
-        %Return the co-ordinates of the points that are in the polygon
-            inPoints = [bigGridX(in), bigGridY(in)];
         end
     end
 end

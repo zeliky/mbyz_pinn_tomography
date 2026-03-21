@@ -44,6 +44,8 @@ function runProduction1()
     cfg.split = [0.70, 0.15, 0.15];
     cfg.save_full_tmaps = false;
     cfg.verbose_tof = false;
+    cfg.save_previews = true;
+    cfg.mat_minimal = false;
 
     subfolders = {'train', 'val', 'test'};
     for i = 1:length(subfolders)
@@ -53,6 +55,19 @@ function runProduction1()
 
     date_label = lower(datestr(now, 'dd_mmm_yyyy'));
     tof_cfg = make_tof_cfg(cfg);
+    geom = make_tof_geom(tof_cfg);
+
+    % Healthy ToF is identical for every sample only when noise_std == 0 (same V_h).
+    % If you change expType or per-sample healthy geometry, disable this path.
+    use_healthy_cache = (cfg.noise_std == 0);
+    t_h_ref = [];
+    tmap_h_ref = [];
+    if use_healthy_cache
+        cfg_ref = cfg;
+        cfg_ref.num_tumours = 1;
+        [V_h_ref, ~, ~] = runAnatomy('default', cfg_ref);
+        [t_h_ref, ~, tmap_h_ref, ~] = tofTravelTimeFromGeom(geom, V_h_ref);
+    end
 
     start_time = tic;
     fprintf('Starting production (label date %s)\n', date_label);
@@ -68,10 +83,13 @@ function runProduction1()
 
         [V_h, V_t, Mask] = runAnatomy('default', cfg_a);
 
-        tof_eng = ToF();
-        tof_eng.setProperties(tof_cfg);
-        [th, ~, tmap_h, ~] = tof_eng.createTravelTime(V_h);
-        [tt, ~, tmap_t, ~] = tof_eng.createTravelTime(V_t);
+        if use_healthy_cache
+            th = t_h_ref;
+            tmap_h = tmap_h_ref;
+        else
+            [th, ~, tmap_h, ~] = tofTravelTimeFromGeom(geom, V_h);
+        end
+        [tt, ~, tmap_t, ~] = tofTravelTimeFromGeom(geom, V_t);
         tdiff = tt - th;
 
         data_to_save.Vh = V_h;
@@ -82,15 +100,18 @@ function runProduction1()
         data_to_save.tdiff = tdiff;
         data_to_save.tmap_h = tmap_h;
         data_to_save.tmap_t = tmap_t;
-        data_to_save.tof_obj = tof_eng;
+        data_to_save.x_s = geom.S;
+        data_to_save.x_r = geom.R;
 
         save_comprehensive_sample(data_to_save, cfg_a, sample_id);
 
-        prev_dir = fullfile(cfg.output_root, split_name, 'previews');
-        export_png_gray(V_h, fullfile(prev_dir, ['anatomy_noTumors_' sample_id '.png']));
-        export_png_gray(V_t, fullfile(prev_dir, ['anatomy_withTumors_' sample_id '.png']));
-        export_png_tof(tt, fullfile(prev_dir, ['tof_' sample_id '.png']));
-        export_png_tof(tdiff, fullfile(prev_dir, ['tof_diff_' sample_id '.png']));
+        if cfg.save_previews
+            prev_dir = fullfile(cfg.output_root, split_name, 'previews');
+            export_png_gray(V_h, fullfile(prev_dir, ['anatomy_noTumors_' sample_id '.png']));
+            export_png_gray(V_t, fullfile(prev_dir, ['anatomy_withTumors_' sample_id '.png']));
+            export_png_tof(tt, fullfile(prev_dir, ['tof_' sample_id '.png']));
+            export_png_tof(tdiff, fullfile(prev_dir, ['tof_diff_' sample_id '.png']));
+        end
     end
 
     fprintf('\nProduction finished in %s\n', sec2hms(toc(start_time)));
@@ -126,6 +147,24 @@ function tf = make_tof_cfg(cfg)
     if isfield(cfg, 'sos_healthy'),   tf.sos_healthy = cfg.sos_healthy; end
     if isfield(cfg, 'sos_fat'),       tf.sos_fat = cfg.sos_fat; end
     if isfield(cfg, 'sos_tumor_mean'), tf.sos_tumor_mean = cfg.sos_tumor_mean; end
+end
+
+function geom = make_tof_geom(tof_cfg)
+    t = ToF();
+    t.setProperties(tof_cfg);
+    geom.x = t.x;
+    geom.y = t.y;
+    geom.z = t.z;
+    geom.R = t.R;
+    geom.xs_sources = t.xs_sources;
+    geom.ys_sources = t.ys_sources;
+    geom.number_of_sources = t.number_of_sources;
+    geom.number_of_receivers = t.number_of_receivers;
+    geom.verbose = t.verbose;
+    geom.one_source = t.one_source;
+    geom.m = t.m;
+    geom.n = t.n;
+    geom.S = t.S;
 end
 
 function export_png_gray(V, outpath)
