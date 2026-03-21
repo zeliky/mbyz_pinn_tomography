@@ -9,7 +9,7 @@ from tomo.initializers.unet_initializer import (
     normalized_c_base_from_config,
 )
 from tomo.training.stage0_initializer import (
-    _ensure_raw_tof_4d,
+    _ensure_tof_tumor_4d,
     _get_criterion,
     _train_epoch,
 )
@@ -33,13 +33,13 @@ def test_sr_initializer_net_attention_shapes() -> None:
     assert out.min() >= 0.0 and out.max() <= 1.0
 
 
-def test_ensure_raw_tof_4d() -> None:
-    """_ensure_raw_tof_4d adds channel dim when raw_tof is [B, 32, 32]."""
+def test_ensure_tof_tumor_4d() -> None:
+    """_ensure_tof_tumor_4d adds channel dim when tensor is [B, 32, 32]."""
     x3 = torch.randn(3, 32, 32)
-    x4 = _ensure_raw_tof_4d(x3)
+    x4 = _ensure_tof_tumor_4d(x3)
     assert x4.shape == (3, 1, 32, 32)
     x4_already = torch.randn(3, 1, 32, 32)
-    assert _ensure_raw_tof_4d(x4_already).shape == (3, 1, 32, 32)
+    assert _ensure_tof_tumor_4d(x4_already).shape == (3, 1, 32, 32)
 
 
 def test_normalized_c_base_from_config() -> None:
@@ -74,8 +74,8 @@ def test_stage0_one_step_backward_residual() -> None:
     normalized_c_base = normalized_c_base_from_config(0.1, 2.1, 1.5)
     anatomy = torch.rand(2, 1, 128, 128)
     batch = {
-        "raw_tof": torch.randn(2, 32, 32),
-        "anatomy": anatomy,
+        "tof_tumor_raw": torch.randn(2, 32, 32),
+        "sos_map_normalized": anatomy,
     }
     device = torch.device("cpu")
     train_loss, train_mse_recon = _train_epoch(

@@ -40,20 +40,21 @@ function runProduction1()
     cfg.sos_tumor_spread = 0.02;
     cfg.noise_std = 0.001;
     cfg.total_samples = 500;
-    cfg.output_root = 'data_v1';
     cfg.split = [0.70, 0.15, 0.15];
     cfg.save_full_tmaps = false;
     cfg.verbose_tof = false;
     cfg.save_previews = true;
     cfg.mat_minimal = false;
 
-    subfolders = {'train', 'val', 'test'};
+    repo_root = fileparts(genRoot);
+    date_label = lower(datestr(now, 'dd_mmm_yyyy_hhmm'));
+    cfg.output_root = fullfile(repo_root, ['dataset_' date_label '_' cfg_to_str(cfg)]);
+
+    subfolders = {'train', 'validate', 'test'};
     for i = 1:length(subfolders)
         mkdir(fullfile(cfg.output_root, subfolders{i}, 'mat'));
         mkdir(fullfile(cfg.output_root, subfolders{i}, 'previews'));
     end
-
-    date_label = lower(datestr(now, 'dd_mmm_yyyy'));
     tof_cfg = make_tof_cfg(cfg);
     geom = make_tof_geom(tof_cfg);
 
@@ -115,9 +116,27 @@ function runProduction1()
     end
 
     fprintf('\nProduction finished in %s\n', sec2hms(toc(start_time)));
+    fprintf('\nPoint repo-root inputData symlink at this run (from repo root):\n  ln -sfn %s inputData\n', cfg.output_root);
 end
 
 %% --- helpers ---
+
+function tag = cfg_to_str(cfg)
+    % CFG_TO_STR  Short filesystem-safe tag from static experiment fields.
+    parts = {
+        sprintf('im%d', cfg.imSize)
+        sprintf('ns%d', cfg.num_sensors)
+        sprintf('nr%d', cfg.num_receivers)
+        sprintf('n%d', cfg.total_samples)
+        sprintf('noise_%.4g', cfg.noise_std)
+        't_rand_1_5'
+        };
+    if isfield(cfg, 'tumor_size_multi') && ~isempty(cfg.tumor_size_multi)
+        parts{end+1} = sprintf('tsm_%.4g', cfg.tumor_size_multi);
+    end
+    tag = strjoin(parts, '_');
+    tag = regexprep(tag, '[^\w\.\-]', '_');
+end
 
 function [split_name, num_tumours] = get_sample_metadata(idx, cfg)
     val_start = round(cfg.total_samples * cfg.split(1));
@@ -126,7 +145,7 @@ function [split_name, num_tumours] = get_sample_metadata(idx, cfg)
     if idx <= val_start
         split_name = 'train';
     elseif idx <= test_start
-        split_name = 'val';
+        split_name = 'validate';
     else
         split_name = 'test';
     end

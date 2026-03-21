@@ -17,20 +17,12 @@ import torch
 
 from tomo.data.datamodule import TomographyDataModule
 from tomo.initializers.unet_initializer import UNetInitializer
+from tomo.training.stage0_initializer import _ensure_tof_tumor_4d
 from tomo.operators.matlab_fmm_wrapper import forward_tof
 from tomo.state.observation import Observation
 from tomo.training.stage1_parametrization import params_to_c_map_scaled
 from tomo.training.stage1_search import run_stage1a_search, run_stage1b_search
 from tomo.utils.units import physical_delta_to_scaled, to_physical_sos, to_scaled_sos
-
-
-def _ensure_raw_tof_4d(raw_tof: torch.Tensor) -> torch.Tensor:
-    """Ensure raw_tof is [B, 1, 32, 32] for the SR model."""
-    if raw_tof.dim() == 2:
-        return raw_tof.unsqueeze(0).unsqueeze(0)
-    if raw_tof.dim() == 3:
-        return raw_tof.unsqueeze(1)
-    return raw_tof
 
 
 def _run_stage1_preflight(
@@ -64,13 +56,13 @@ def _run_stage1_preflight(
     if batch is None:
         print("Stage 1 preflight failed: loader is empty (no batch).", file=sys.stderr)
         sys.exit(1)
-    for key in ("raw_tof", "x_s", "x_r"):
+    for key in ("tof_tumor_raw", "x_s", "x_r"):
         if key not in batch:
             print(f"Stage 1 preflight failed: batch missing key '{key}'.", file=sys.stderr)
             sys.exit(1)
 
     # 3. delta_c0 shape and finite
-    raw_tof_4d = _ensure_raw_tof_4d(batch["raw_tof"]).to(initializer._device)
+    raw_tof_4d = _ensure_tof_tumor_4d(batch["tof_tumor_raw"]).to(initializer._device)
     if raw_tof_4d.dim() == 3:
         raw_tof_4d = raw_tof_4d.unsqueeze(1)
     obs = Observation(tof_observed=raw_tof_4d.squeeze(0))
@@ -127,7 +119,7 @@ def _run_stage1_preflight(
         )
         sys.exit(1)
 
-    # 6. forward_tof shape matches raw_tof
+    # 6. forward_tof shape matches tof_tumor_raw
     x_s = batch["x_s"][0]
     x_r = batch["x_r"][0]
     if hasattr(x_s, "detach"):
@@ -140,7 +132,7 @@ def _run_stage1_preflight(
         x_s = x_s.reshape(1, -1)
     if x_r.ndim == 1:
         x_r = x_r.reshape(1, -1)
-    raw_tof_np = batch["raw_tof"]
+    raw_tof_np = batch["tof_tumor_raw"]
     if hasattr(raw_tof_np, "detach"):
         raw_tof_np = raw_tof_np.detach().cpu().numpy()
     raw_tof_np = np.asarray(raw_tof_np)
@@ -154,7 +146,7 @@ def _run_stage1_preflight(
         sys.exit(1)
     if tof_pred.shape != raw_tof_np.shape:
         print(
-            f"Stage 1 preflight failed: forward_tof shape {tof_pred.shape} != raw_tof shape {raw_tof_np.shape}.",
+            f"Stage 1 preflight failed: forward_tof shape {tof_pred.shape} != tof_tumor_raw shape {raw_tof_np.shape}.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -274,7 +266,7 @@ def run_stage1_operator_baseline(
         if max_samples is not None and n_processed >= max_samples:
             break
 
-        raw_tof_batch = _ensure_raw_tof_4d(batch["raw_tof"]).to(device)
+        raw_tof_batch = _ensure_tof_tumor_4d(batch["tof_tumor_raw"]).to(device)
         batch_size = raw_tof_batch.shape[0]
 
         for sample_idx in range(batch_size):
@@ -293,14 +285,14 @@ def run_stage1_operator_baseline(
             delta_c0_phys = c0_phys - c_base_phys
             delta_c0_scaled = physical_delta_to_scaled(delta_c0_phys, min_sos, max_sos)
 
-            raw = batch["raw_tof"]
+            raw = batch["tof_tumor_raw"]
             if raw.dim() == 2:
                 raw = raw.unsqueeze(0)
             raw = raw[sample_idx : sample_idx + 1]
             sample_batch = {
-                "raw_tof": raw,
-                "x_s": [batch["x_s"][sample_idx]],
-                "x_r": [batch["x_r"][sample_idx]],
+                "tof_tumor_raw": raw,
+                "x_s": batch["x_s"][sample_idx : sample_idx + 1],
+                "x_r": batch["x_r"][sample_idx : sample_idx + 1],
             }
 
             stage1a_result = run_stage1a_search(

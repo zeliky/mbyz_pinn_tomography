@@ -1,4 +1,4 @@
-"""DataModule for training: creates train/val/test TofDatasets and dataloaders from config."""
+"""DataModule for training: train/val/test TofDatasets and dataloaders from config."""
 
 from __future__ import annotations
 
@@ -11,26 +11,15 @@ from tomo.data.dataset import TofDataset
 
 
 def _collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
-    """Stack fixed-size fields; keep variable-size fields as lists."""
-    stacked = {}
-    list_fields = ("x_s", "x_r", "expanded_tof", "tof_maps")
-    stack_fields = ("anatomy", "tof", "raw_sos", "raw_tof")
-    for key in stack_fields:
-        stacked[key] = torch.stack([b[key] for b in batch], dim=0)
-    for key in list_fields:
-        stacked[key] = [b[key] for b in batch]
-    return stacked
+    """Stack all sample tensors (fixed shapes per dataset run)."""
+    if not batch:
+        return {}
+    keys = TofDataset.SAMPLE_KEYS
+    return {key: torch.stack([b[key] for b in batch], dim=0) for key in keys}
 
 
 class TomographyDataModule:
-    """Creates train/validation/test TofDatasets and dataloaders from a config dict.
-
-    Config should provide at least:
-      - train_path, validation_path, test_path, tof_path
-      - min_sos, max_sos, min_tof, max_tof
-      - batch_size, num_workers
-    Optional: sources_amount, receivers_amount, anatomy_width, anatomy_height (defaults 32, 32, 128, 128).
-    """
+    """Builds TofDatasets from `data` config: `data_root`, normalization bounds, loader settings."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = dict(config)
@@ -40,11 +29,10 @@ class TomographyDataModule:
 
     def _dataset_kwargs(self) -> dict[str, Any]:
         c = self._config
+        if "data_root" not in c:
+            raise KeyError("data config must include 'data_root' (symlink to dataset_* folder).")
         return {
-            "train_path": c["train_path"],
-            "validation_path": c["validation_path"],
-            "test_path": c["test_path"],
-            "tof_path": c["tof_path"],
+            "data_root": c["data_root"],
             "min_sos": c["min_sos"],
             "max_sos": c["max_sos"],
             "min_tof": c["min_tof"],
@@ -53,7 +41,6 @@ class TomographyDataModule:
             "receivers_amount": c.get("receivers_amount", 32),
             "anatomy_width": c.get("anatomy_width", 128),
             "anatomy_height": c.get("anatomy_height", 128),
-            "index_from_mat_only": c.get("index_from_mat_only", False),
         }
 
     def setup(self) -> None:

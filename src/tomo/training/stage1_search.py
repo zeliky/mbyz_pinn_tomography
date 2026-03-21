@@ -37,16 +37,26 @@ def _extract_sample(
     batch: dict[str, Any],
     sample_idx: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Extract raw_tof, x_s, x_r for a single sample."""
-    raw_tof = batch["raw_tof"]
-    if raw_tof.dim() == 3:
-        raw_tof = raw_tof[sample_idx]
+    """Extract tof_tumor_raw, x_s, x_r for a single sample."""
+    t = batch["tof_tumor_raw"]
+    if t.dim() == 4:
+        t = t[sample_idx].squeeze(0)
+    elif t.dim() == 3:
+        t = t[sample_idx]
     else:
-        raw_tof = raw_tof[sample_idx]
-    raw_tof = _to_numpy(raw_tof)
+        t = t[sample_idx]
+    tof_tumor = _to_numpy(t)
 
-    x_s = batch["x_s"][sample_idx]
-    x_r = batch["x_r"][sample_idx]
+    x_s = batch["x_s"]
+    x_r = batch["x_r"]
+    if isinstance(x_s, list):
+        x_s = x_s[sample_idx]
+    else:
+        x_s = x_s[sample_idx]
+    if isinstance(x_r, list):
+        x_r = x_r[sample_idx]
+    else:
+        x_r = x_r[sample_idx]
     x_s = _to_numpy(x_s)
     x_r = _to_numpy(x_r)
 
@@ -55,7 +65,7 @@ def _extract_sample(
     if x_r.ndim == 1:
         x_r = x_r.reshape(1, -1)
 
-    return raw_tof, x_s, x_r
+    return tof_tumor, x_s, x_r
 
 
 def _ensure_grid_coords(
@@ -98,7 +108,7 @@ def run_stage1a_search(
     All objective terms (c_map, c0, c_min, c_max) use physical units.
 
     Returns:
-        best_alpha, best_loss, best_c_map (physical), best_c_map_scaled, tof_pred, raw_tof, diagnostics.
+        best_alpha, best_loss, best_c_map (physical), best_c_map_scaled, tof_pred, tof_tumor_raw, diagnostics.
     """
     raw_tof, x_s, x_r = _extract_sample(batch, sample_idx)
     H, W = delta_c0_scaled.shape
@@ -188,10 +198,10 @@ def run_stage1a_search(
         diagnostics["tof_pred_std"] = float(np.std(best_tof_pred))
         diagnostics["tof_pred_min"] = float(np.min(best_tof_pred))
         diagnostics["tof_pred_max"] = float(np.max(best_tof_pred))
-    diagnostics["raw_tof_mean"] = float(np.mean(raw_tof))
-    diagnostics["raw_tof_std"] = float(np.std(raw_tof))
-    diagnostics["raw_tof_min"] = float(np.min(raw_tof))
-    diagnostics["raw_tof_max"] = float(np.max(raw_tof))
+    diagnostics["tof_tumor_raw_mean"] = float(np.mean(raw_tof))
+    diagnostics["tof_tumor_raw_std"] = float(np.std(raw_tof))
+    diagnostics["tof_tumor_raw_min"] = float(np.min(raw_tof))
+    diagnostics["tof_tumor_raw_max"] = float(np.max(raw_tof))
 
     return {
         "best_alpha": best_alpha,
@@ -199,7 +209,7 @@ def run_stage1a_search(
         "best_c_map": best_c_map_phys,
         "best_c_map_scaled": best_c_map_scaled,
         "tof_pred": best_tof_pred,
-        "raw_tof": raw_tof,
+        "tof_tumor_raw": raw_tof,
         "diagnostics": diagnostics,
     }
 
@@ -401,7 +411,7 @@ def run_stage1b_search(
         "best_c_map": best_c_map_phys,
         "best_c_map_scaled": best_c_map_scaled,
         "tof_pred": best_tof_pred,
-        "raw_tof": raw_tof,
+        "tof_tumor_raw": raw_tof,
         "optimization_success": result.success,
         "diagnostics": diagnostics_1b,
     }

@@ -8,7 +8,7 @@ Help later agents answer:
 
 This repo currently has a small set of unit and smoke tests. Some tests depend on:
 - The native FMM solver (`py2mat.msfm2d` / `msfm2d`)
-- Availability of large MATLAB datasets under `inputData/` (AWS only)
+- Availability of MATLAB-generated datasets: symlink repo-root `inputData` to `dataset_<date>_<tag>/` (see `tof_generator/runProduction1.m`)
 
 ## How to run
 - From repo root:
@@ -47,11 +47,10 @@ This repo currently has a small set of unit and smoke tests. Some tests depend o
 ## Dataset-dependent tests (skipped on this machine)
 - `tests/smoke/test_dataset.py`
   - Marked skipped: "run on AWS instance with data; cannot run on this computer"
-  - Assumes MATLAB `.mat` sources under `inputData/`:
-    - `inputData/ForLearning`
-    - `inputData/ForValidation`
-    - `inputData/ForTest`
-    - `inputData/TimeOfFlightData`
+  - Assumes `inputData` points at a run folder with:
+    - `inputData/train/mat`, `inputData/train/previews`
+    - `inputData/validate/mat`, `inputData/validate/previews`
+    - `inputData/test/mat`, `inputData/test/previews`
 
 ## Integration tests gap
 - `tests/integration/` directory is currently missing.

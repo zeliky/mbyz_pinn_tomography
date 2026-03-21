@@ -19,10 +19,7 @@ def test_stage1_preflight_fails_when_checkpoint_missing() -> None:
     """Preflight should exit with clear message when checkpoint_path does not exist."""
     full_config = {
         "data": {
-            "train_path": ".",
-            "validation_path": ".",
-            "test_path": ".",
-            "tof_path": ".",
+            "data_root": ".",
             "min_sos": 0.1,
             "max_sos": 2.1,
             "min_tof": 0.0,

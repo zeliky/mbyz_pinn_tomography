@@ -1,6 +1,13 @@
 function save_comprehensive_sample(data, cfg, label)
     % SAVE_COMPREHENSIVE_SAMPLE  Write one training sample (.mat v7.3) for Python/h5py.
     %
+    % Python (src/tomo) loads struct D field-for-field into each sample/batch (plus derived tensors):
+    %   Batch keys mirroring D: tof_tumor_raw, sos_map, tof_healthy_raw, tof_diff_raw,
+    %   sos_healthy_base, tumor_mask, x_s, x_r, and when saved: tof_maps_tumor,
+    %   tof_maps_healthy, tof_maps_diff. Nested metadata.* may appear flattened in loadmat.
+    %   Derived in TofDataset (not in file): sos_map_normalized, tof_tumor_normalized_grid.
+    % mat_minimal branch omits tumor/healthy ToF grids and maps; use full saves for Stage 0/1.
+    %
     % data: Vh, Vt, Mask, th, tt, tdiff; x_s/x_r (sensor matrices) or tof_obj (ToF handle)
     % cfg: output_root, current_split; optional save_full_tmaps, mat_minimal
     %
