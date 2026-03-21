@@ -140,6 +140,10 @@ Then verify FMM-dependent unit test:
 pytest -q tests/unit/test_forward_tof.py
 ```
 
+## 7a. MATLAB dataset generation (`tof_generator/`)
+
+Standalone MATLAB (run on the same OS as MATLAB, e.g. Windows with 64-bit MATLAB). Prebuilt `msfm2d` MEX files live in `src/py2mat/mex/`; copies used at runtime are in `tof_generator/eikonal/fast_marching_kroon/functions/` (e.g. `msfm2d.mexw64` on Win64). To force the pure MATLAB implementation, set `TOF_FORCE_MSFM_MATLAB` to `1`, `true`, or `yes`.
+
 ## 8. Daily Usage
 
 Each new terminal session:

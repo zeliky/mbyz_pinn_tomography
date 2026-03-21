@@ -4,8 +4,8 @@ close all;
 clc;
 
 scr = fileparts(mfilename('fullpath'));
-addpath(genpath(fullfile(scr, 'eikonal')));
-addpath(fullfile(scr, '..', 'matlab_src'));
+addpath(fullfile(scr, 'eikonal'));
+initEikonalPaths();
 
 % 1. Setup Parameters (1px = 1mm)
 cfg.imSize = 128;

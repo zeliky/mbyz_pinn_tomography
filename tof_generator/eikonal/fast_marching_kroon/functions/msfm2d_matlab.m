@@ -1,4 +1,4 @@
-function [T,Y]=msfm2d(F, SourcePoints, usesecond, usecross)
+function [T,Y]=msfm2d_matlab(F, SourcePoints, usesecond, usecross)
 % This function MSFM2D calculates the shortest distance from a list of
 % points to all other pixels in an image, using the  
 % Multistencil Fast Marching Method (MSFM). This method gives more accurate 

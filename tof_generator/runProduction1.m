@@ -5,8 +5,30 @@ function runProduction1()
     clc;
 
     genRoot = fileparts(mfilename('fullpath'));
-    addpath(genpath(fullfile(genRoot, 'eikonal')));
-    addpath(fullfile(genRoot, '..', 'matlab_src'));
+    addpath(fullfile(genRoot, 'eikonal'));
+    hasMex = initEikonalPaths();
+    if hasMex
+        fprintf('msfm2d: using MEX backend (%s)\n', ['msfm2d.' mexext]);
+    else
+        fprintf('msfm2d: using MATLAB backend (no MEX for this platform)\n');
+    end
+
+    p = gcp('nocreate');
+    if isempty(p)
+        try
+            parpool;
+        catch
+        end
+    end
+    p = gcp('nocreate');
+    if ~isempty(p)
+        try
+            pathCmd = pctPathEvalString(genRoot);
+            pctRunOnAll(@() eval(pathCmd));
+        catch ME
+            warning('TOF:parforPathSync', 'pctRunOnAll path sync failed: %s', ME.message);
+        end
+    end
 
     %% Configuration
     cfg.imSize = 128;

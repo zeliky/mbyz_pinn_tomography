@@ -98,13 +98,13 @@ if(nargout>1)
     if(size(F,3)>1)
         [T,Y]=msfm3d(F, SourcePoints, UseSecond, UseCross);        
     else
-        [T,Y]=msfm2d(F, SourcePoints(1:2,:), UseSecond, UseCross);
+        [T,Y]=msfm2d_choose(F, SourcePoints(1:2,:), UseSecond, UseCross);
     end
 else
     if(size(F,3)>1)
         T=msfm3d(F, SourcePoints, UseSecond, UseCross);
     else
-        T=msfm2d(F, SourcePoints(1:2,:), UseSecond, UseCross);
+        T=msfm2d_choose(F, SourcePoints(1:2,:), UseSecond, UseCross);
     end
 end
 
@@ -117,4 +117,32 @@ try
     addpath([functiondir '/shortestpath'])
 catch me
     disp(me.message);
+end
+
+function varargout = msfm2d_choose(F, SourcePoints, UseSecond, UseCross)
+    persistent warnedMexFail
+    if isempty(warnedMexFail), warnedMexFail = false; end
+    ev = lower(strtrim(getenv('TOF_FORCE_MSFM_MATLAB')));
+    forceMatlab = ismember(ev, {'1','true','yes'});
+    wantMex = ~forceMatlab && (exist('msfm2d', 'file') == 3);
+    if wantMex
+        try
+            if nargout > 1
+                [varargout{1}, varargout{2}] = msfm2d(F, SourcePoints, UseSecond, UseCross);
+            else
+                varargout{1} = msfm2d(F, SourcePoints, UseSecond, UseCross);
+            end
+            return
+        catch ME
+            if ~warnedMexFail
+                warning('TOF:msfm2dMexFailed', 'msfm2d MEX failed (%s); using MATLAB implementation.', ME.message);
+                warnedMexFail = true;
+            end
+        end
+    end
+    if nargout > 1
+        [varargout{1}, varargout{2}] = msfm2d_matlab(F, SourcePoints, UseSecond, UseCross);
+    else
+        varargout{1} = msfm2d_matlab(F, SourcePoints, UseSecond, UseCross);
+    end
 end

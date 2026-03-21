@@ -11,8 +11,8 @@ function analyze_difficulty(expType)
     clc;
 
     genRoot = fileparts(mfilename('fullpath'));
-    addpath(genpath(fullfile(genRoot, 'eikonal')));
-    addpath(fullfile(genRoot, '..', 'matlab_src'));
+    addpath(fullfile(genRoot, 'eikonal'));
+    initEikonalPaths();
 
     cfg_base.imSize = 128;
     cfg_base.num_sensors = 64;

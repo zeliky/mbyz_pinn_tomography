@@ -124,6 +124,26 @@ function runProduction1()
         mkdir(fullfile(cfg.output_root, subfolders{i}, 'mat'));
     end
 
+    genRoot = fileparts(mfilename('fullpath'));
+    addpath(fullfile(genRoot, 'eikonal'));
+    initEikonalPaths();
+    p = gcp('nocreate');
+    if isempty(p)
+        try
+            parpool;
+        catch
+        end
+    end
+    p = gcp('nocreate');
+    if ~isempty(p)
+        try
+            pathCmd = pctPathEvalString(genRoot);
+            pctRunOnAll(@() eval(pathCmd));
+        catch ME
+            warning('TOF:parforPathSync', 'pctRunOnAll path sync failed: %s', ME.message);
+        end
+    end
+
     parfor idx = 1:cfg.total_samples %
         % 1. Meta-data and Paths
         [split_name, num_tumours] = get_sample_metadata(idx, cfg); %
