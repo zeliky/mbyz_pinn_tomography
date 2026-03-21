@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
@@ -21,6 +22,7 @@ from tomo.stage2.stage2_env import Stage2Env
 from tomo.stage2.stage2_policy import Stage2Policy
 from tomo.stage2.stage2_trainer import Stage2Trainer
 from tomo.training.stage2_data import load_stage2_samples
+from tomo.utils.logging import HtmlTrainingReport, log_stage2_episode_series, setup_training_logging
 
 
 def main() -> None:
@@ -127,18 +129,38 @@ def main() -> None:
         device=device,
     )
 
+    enable_html_report = train_cfg.get("enable_html_report", True)
+    train_logger = None
+    html_report: HtmlTrainingReport | None = None
+    if enable_html_report:
+        run_id = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+        ckpt_dir = Path(train_cfg.get("checkpoint_dir", "checkpoints/stage2"))
+        log_dir_override = train_cfg.get("log_dir")
+        log_root = (
+            Path(log_dir_override) / run_id if log_dir_override else ckpt_dir / "runs" / run_id
+        )
+        train_logger, _ = setup_training_logging(log_root, run_id=run_id)
+        html_report = HtmlTrainingReport(log_root / f"output___{run_id}.html")
+        html_report.add_text(f"Stage 2  log_dir={log_root}")
+        html_report.add_text(f"terminal log: terminal_{run_id}.txt")
+
     max_episodes = train_cfg.get("max_episodes", 100)
     episode_infos = trainer.train(samples, max_episodes=max_episodes)
 
     checkpoint_dir = Path(train_cfg.get("checkpoint_dir", "checkpoints/stage2"))
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(policy.state_dict(), checkpoint_dir / "stage2_policy.pt")
+    policy_path = checkpoint_dir / "stage2_policy.pt"
+    torch.save(policy.state_dict(), policy_path)
 
-    print(f"Stage 2 training done. {len(episode_infos)} episodes.")
-    if episode_infos:
-        avg_reward = sum(e.get("reward", 0) for e in episode_infos) / len(episode_infos)
-        print(f"Avg episode reward: {avg_reward:.4f}")
-    print(f"Policy saved to {checkpoint_dir / 'stage2_policy.pt'}")
+    if train_logger is not None and html_report is not None:
+        log_stage2_episode_series(train_logger, html_report, episode_infos)
+        train_logger.info("Policy saved to %s", policy_path)
+    else:
+        print(f"Stage 2 training done. {len(episode_infos)} episodes.")
+        if episode_infos:
+            avg_reward = sum(e.get("reward", 0) for e in episode_infos) / len(episode_infos)
+            print(f"Avg episode reward: {avg_reward:.4f}")
+        print(f"Policy saved to {policy_path}")
 
 
 if __name__ == "__main__":

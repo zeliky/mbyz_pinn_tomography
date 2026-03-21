@@ -9,6 +9,9 @@ c_max_phys: 1.8
 # Stage 1 checkpoint dir (to load c_stage1, tof_pred)
 stage1_checkpoint_dir: checkpoints/stage1b
 checkpoint_dir: checkpoints/stage2
+# When true: terminal_<run_id>.txt + output___<run_id>.html under log_dir or checkpoint_dir/runs/<run_id>
+enable_html_report: true
+log_dir: null  # null -> checkpoints/stage2/runs/<run_id>
 
 # ROI construction
 roi:

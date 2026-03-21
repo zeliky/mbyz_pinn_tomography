@@ -8,6 +8,7 @@ The model predicts delta_c0_scaled; the training target is built consistently in
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from tomo.initializers.unet_initializer import (
     delta_target_from_anatomy,
     normalized_c_base_from_config,
 )
+from tomo.utils.logging import EpochMetricsLogger, HtmlTrainingReport, setup_training_logging
 
 
 def _ensure_tof_tumor_4d(tof_tumor_raw: torch.Tensor) -> torch.Tensor:
@@ -130,11 +132,36 @@ def run_stage0(
     save_best = training_config.get("save_best", True)
     save_last = training_config.get("save_last", True)
     val_every = training_config.get("val_every", 1)
+    enable_html_report = training_config.get("enable_html_report", True)
+    log_dir_override = training_config.get("log_dir")
 
     criterion = _get_criterion(loss_name)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+
+    run_id = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
+    log_root = (
+        Path(log_dir_override) / run_id
+        if log_dir_override
+        else Path(checkpoint_dir) / "runs" / run_id
+    )
+    train_logger, _ = setup_training_logging(log_root, run_id=run_id)
+    report: HtmlTrainingReport | None = None
+    if enable_html_report:
+        report = HtmlTrainingReport(log_root / f"output___{run_id}.html")
+        report.add_text(f"Stage 0  log_dir={log_root}")
+        report.add_text(f"terminal log: terminal_{run_id}.txt")
+
+    metrics = EpochMetricsLogger(train_logger, report, total_epochs=epochs)
+    train_logger.info(
+        "Stage 0 start: epochs=%d lr=%g loss=%s checkpoint_dir=%s",
+        epochs,
+        lr,
+        loss_name,
+        checkpoint_dir,
+    )
+
     best_val_loss = float("inf")
     best_path = None
     last_val_loss: float | None = None
@@ -154,9 +181,12 @@ def run_stage0(
                 model, val_loader, criterion, device, normalized_c_base
             )
             last_val_loss, last_val_mse = val_loss, val_mse_recon
-            print(
-                f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  train_mse_recon={train_mse_recon:.6f}  "
-                f"val_loss={val_loss:.4f}  val_mse_recon={val_mse_recon:.6f}"
+            metrics.on_epoch_end(
+                epoch + 1,
+                train_loss,
+                train_mse_recon,
+                val_loss=val_loss,
+                val_mse_recon=val_mse_recon,
             )
             if save_best and val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -171,9 +201,7 @@ def run_stage0(
                     best_path,
                 )
         else:
-            print(
-                f"epoch {epoch + 1}/{epochs}  train_loss={train_loss:.4f}  train_mse_recon={train_mse_recon:.6f}"
-            )
+            metrics.on_epoch_end(epoch + 1, train_loss, train_mse_recon)
 
     if save_last:
         last_path = os.path.join(checkpoint_dir, "last.pt")
@@ -187,4 +215,5 @@ def run_stage0(
             last_path,
         )
 
+    train_logger.info("Stage 0 finished. best_checkpoint=%s", best_path)
     return best_path
