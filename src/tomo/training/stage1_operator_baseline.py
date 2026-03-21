@@ -19,11 +19,15 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 from tomo.data.datamodule import TomographyDataModule
 from tomo.data.normalization_metadata import resolve_data_config
 from tomo.initializers.unet_initializer import UNetInitializer
-from tomo.training.stage0_initializer import _ensure_tof_tumor_4d
+from tomo.training.stage0_initializer import (
+    _ensure_tof_tumor_4d,
+    ensure_tof_measurement_grid,
+)
 from tomo.operators.matlab_fmm_wrapper import forward_tof
 from tomo.state.observation import Observation
 from tomo.training.stage1_parametrization import params_to_c_map_scaled
@@ -31,6 +35,39 @@ from tomo.training.stage1_search import run_stage1a_search, run_stage1b_search
 from tomo.utils.units import physical_delta_to_scaled, to_physical_sos, to_scaled_sos
 
 logger = logging.getLogger(__name__)
+
+
+def _initializer_model_type(net: nn.Module) -> str:
+    mt = getattr(net, "model_type", "sr_initializer_net")
+    if not isinstance(mt, str):
+        return "sr_initializer_net"
+    return mt
+
+
+def _initializer_tof_batch(batch: dict[str, Any], net: nn.Module) -> torch.Tensor:
+    mt = _initializer_model_type(net)
+    if mt == "stage0_backproj_unet":
+        return ensure_tof_measurement_grid(batch["tof_diff_normalized"])
+    return _ensure_tof_tumor_4d(batch["tof_diff_normalized"])
+
+
+def _initializer_observation(
+    batch: dict[str, Any],
+    sample_idx: int,
+    initializer_tof_bchw: torch.Tensor,
+    net: nn.Module,
+) -> Observation:
+    tof_1 = initializer_tof_bchw[sample_idx : sample_idx + 1].squeeze(0)
+    mt = _initializer_model_type(net)
+    if mt == "stage0_backproj_unet":
+        return Observation(
+            tof_observed=tof_1,
+            layout_metadata={
+                "x_s": batch["x_s"][sample_idx : sample_idx + 1],
+                "x_r": batch["x_r"][sample_idx : sample_idx + 1],
+            },
+        )
+    return Observation(tof_observed=tof_1)
 
 
 def _log_tof_stats(label: str, x: Any) -> None:
@@ -95,12 +132,10 @@ def _run_stage1_preflight(
     _log_tof_stats("physical_observation_tof_tumor_raw", batch["tof_tumor_raw"])
 
     # 3. delta_c0 shape and finite (initializer: same input as Stage 0)
-    initializer_tof_4d = _ensure_tof_tumor_4d(batch["tof_diff_normalized"]).to(
-        initializer._device
-    )
+    initializer_tof_4d = _initializer_tof_batch(batch, initializer._net).to(initializer._device)
     if initializer_tof_4d.dim() == 3:
         initializer_tof_4d = initializer_tof_4d.unsqueeze(1)
-    obs = Observation(tof_observed=initializer_tof_4d.squeeze(0))
+    obs = _initializer_observation(batch, 0, initializer_tof_4d, initializer._net)
     with torch.no_grad():
         state = initializer(obs)
     c0_phys = (
@@ -263,6 +298,17 @@ def run_stage1_operator_baseline(
         loader = dm.test_dataloader()
     else:
         loader = dm.val_dataloader()
+    init_cfg = full_config.get("initializer")
+    init_net: nn.Module | None = None
+    expected_model_type: str | None = None
+    if init_cfg is not None:
+        from hydra.utils import instantiate
+        from omegaconf import OmegaConf
+
+        cfg = OmegaConf.create(init_cfg) if isinstance(init_cfg, dict) else init_cfg
+        init_net = instantiate(cfg)
+        expected_model_type = str(getattr(init_net, "model_type", "")) or None
+
     initializer = UNetInitializer(
         num_nodes=128 * 128,
         c0_fallback=float(c_base_phys),
@@ -270,7 +316,8 @@ def run_stage1_operator_baseline(
         max_sos=max_sos,
         c_base=float(c_base_phys),
         device=device,
-        net=None,
+        net=init_net,
+        expected_model_type=expected_model_type,
     )
     initializer.load_checkpoint(checkpoint_path, device=device)
     initializer._net.eval()
@@ -314,7 +361,7 @@ def run_stage1_operator_baseline(
             batch["tof_tumor_raw"],
         )
 
-        initializer_tof_bchw = _ensure_tof_tumor_4d(batch["tof_diff_normalized"]).to(device)
+        initializer_tof_bchw = _initializer_tof_batch(batch, initializer._net).to(device)
         physical_tof_bchw_shape = _ensure_tof_tumor_4d(batch["tof_tumor_raw"]).shape[0]
         batch_size = physical_tof_bchw_shape
         if initializer_tof_bchw.shape[0] != batch_size:
@@ -328,8 +375,7 @@ def run_stage1_operator_baseline(
             if max_samples is not None and n_processed >= max_samples:
                 break
 
-            initializer_tof_1chw = initializer_tof_bchw[sample_idx : sample_idx + 1]
-            obs = Observation(tof_observed=initializer_tof_1chw.squeeze(0))
+            obs = _initializer_observation(batch, sample_idx, initializer_tof_bchw, initializer._net)
             with torch.no_grad():
                 state = initializer(obs)
             c0_phys = (

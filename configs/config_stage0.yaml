@@ -1,5 +1,7 @@
 # Stage 0: initializer-only training (no operator/policy).
-# Override initializer to use sr_resnet_attention: python scripts/train_stage0.py initializer=sr_resnet_attention
+# Override initializer: python scripts/train_stage0.py initializer=sr_resnet_attention
+# Backprojection + MONAI U-Net (build artifacts/backprojection_operator.npz first):
+#   python scripts/train_stage0.py initializer=stage0_backproj_unet
 defaults:
   - _self_
   - data: default

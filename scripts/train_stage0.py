@@ -1,4 +1,4 @@
-"""Stage 0 training entrypoint: train SR initializer (tof_diff_normalized -> 128x128 SOS)."""
+"""Stage 0 training entrypoint: SR (32x32) or backprojection+U-Net (S,R grid) initializer."""
 
 import sys
 from pathlib import Path

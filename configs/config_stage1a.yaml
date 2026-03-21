@@ -1,5 +1,8 @@
 # Stage 1A: alpha-only calibration around frozen Stage 0.
 # Override via Hydra: run_stage1b=false to skip Stage 1B; training=stage1b to use Stage 1B config.
+#
+# If Stage 0 checkpoint is stage0_backproj_unet, add the same initializer to defaults, e.g.:
+#   - initializer: stage0_backproj_unet
 defaults:
   - _self_
   - data: default

@@ -1,0 +1,21 @@
+# Backprojection + MONAI U-Net initializer. Build operator first, e.g.:
+#   python scripts/build_backprojection_operator.py -o artifacts/backprojection_operator.npz --data_root <inputData> --split train
+# Or: --mat path/to/sample.mat
+# If Stage 1 uses coord_range (physical->grid), pass the same --coord_lo/--coord_hi when building.
+#
+# Switch Stage 0: defaults in config_stage0.yaml -> initializer: stage0_backproj_unet
+_target_: tomo.models.stage0_backproj_unet.Stage0BackprojUNet
+operator_path: artifacts/backprojection_operator.npz
+add_coverage_channel: true
+normalize_coverage_channel_for_unet: true
+output_activation: none
+tanh_scale: 1.0
+coverage_norm: true
+coverage_power: 1.0
+coverage_eps: 1.0e-8
+validate_geometry: true
+geometry_rtol: 1.0e-5
+geometry_atol: 1.0e-6
+unet_channels: [16, 32, 64, 128, 256]
+unet_strides: [2, 2, 2, 2]
+unet_num_res_units: 0

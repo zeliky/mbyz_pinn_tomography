@@ -1,10 +1,13 @@
-"""UNet initializer: learned 32x32 -> 128x128 TOF-to-SoS super-resolution.
+"""UNet initializer: SR (32x32) or backprojection+U-Net from measurement grid [S,R].
 
-Stage 0: SRInitializerNet predicts normalized non-negative residual delta_c0 above c_base.
-UNetInitializer loads checkpoint and builds c0 = c_base + delta_c0_pred.
+Stage 0: predicts residual delta_c0 above c_base; UNetInitializer builds c0 = c_base + delta_c0_pred.
+Backprojection model requires Observation.layout_metadata with x_s, x_r tensors.
 """
 
 from __future__ import annotations
+
+import warnings
+from typing import Any, ClassVar
 
 import torch
 import torch.nn as nn
@@ -97,6 +100,12 @@ class TOFGuidedAttention(nn.Module):
         return self.gamma * refined + features, attention_weights
 
 
+def _infer_legacy_model_type(state: dict[str, Any]) -> str:
+    if any(k.startswith("backprojection.") for k in state):
+        return "stage0_backproj_unet"
+    return "sr_initializer_net"
+
+
 class SRInitializerNet(nn.Module):
     """
     Super-resolution net: raw_tof [B, 1, 32, 32] -> delta_c0 [B, 1, 128, 128].
@@ -104,6 +113,8 @@ class SRInitializerNet(nn.Module):
     normalized_c0 = normalized_c_base + delta_c0. Encoder-decoder with optional
     TOFGuidedAttention in bottleneck.
     """
+
+    model_type: ClassVar[str] = "sr_initializer_net"
 
     def __init__(
         self,
@@ -214,6 +225,9 @@ class SRInitializerNet(nn.Module):
         dec5 = self.dec_conv5(dec4)
         return self.final_conv(dec5)
 
+    def checkpoint_metadata(self) -> dict[str, Any]:
+        return {"model_type": self.model_type}
+
 
 class UNetInitializer(Initializer):
     """
@@ -231,6 +245,7 @@ class UNetInitializer(Initializer):
         in_channels: int = 32,
         device: torch.device | None = None,
         net: nn.Module | None = None,
+        expected_model_type: str | None = None,
     ) -> None:
         self.num_nodes = num_nodes
         self.c0_fallback = c0_fallback
@@ -240,6 +255,12 @@ class UNetInitializer(Initializer):
         self._device = device
         self._net = net
         self._normalized_c_base: float | None = None
+        self._expected_model_type = expected_model_type
+        self._checkpoint_model_type: str | None = None
+        if net is not None:
+            self._checkpoint_model_type = str(
+                getattr(net, "model_type", self._checkpoint_model_type or "sr_initializer_net")
+            )
 
     def _get_normalized_c_base(self) -> float:
         if self._normalized_c_base is None:
@@ -249,12 +270,41 @@ class UNetInitializer(Initializer):
         return self._normalized_c_base
 
     def load_checkpoint(self, path: str, device: torch.device | None = None) -> None:
-        """Load SRInitializerNet state_dict from checkpoint. Creates net if needed."""
+        """Load weights; ``model_type`` in checkpoint must match ``expected_model_type`` when set."""
         ckpt = torch.load(path, map_location=device or "cpu", weights_only=False)
         state = ckpt.get("model_state_dict", ckpt)
+        if not isinstance(state, dict):
+            raise TypeError("Checkpoint model_state_dict must be a dict")
+
+        model_type_in_ckpt = ckpt.get("model_type")
+        if model_type_in_ckpt is None:
+            model_type_in_ckpt = _infer_legacy_model_type(state)
+            warnings.warn(
+                f"Checkpoint {path} missing 'model_type'; inferred {model_type_in_ckpt!r} "
+                "(prefer saving explicit model_type).",
+                stacklevel=2,
+            )
+        model_type_in_ckpt = str(model_type_in_ckpt)
+
+        if (
+            self._expected_model_type is not None
+            and model_type_in_ckpt != self._expected_model_type
+        ):
+            raise ValueError(
+                f"Checkpoint model_type={model_type_in_ckpt!r} != expected "
+                f"{self._expected_model_type!r}"
+            )
+
         if self._net is None:
+            if model_type_in_ckpt == "stage0_backproj_unet":
+                raise ValueError(
+                    "Checkpoint is stage0_backproj_unet but net was not provided; "
+                    "instantiate Stage0BackprojUNet (e.g. via Hydra) and pass net=..."
+                )
             self._net = SRInitializerNet()
+
         self._net.load_state_dict(state, strict=True)
+        self._checkpoint_model_type = model_type_in_ckpt
         if device is not None:
             self._net = self._net.to(device)
         self._device = device or self._device
@@ -270,24 +320,56 @@ class UNetInitializer(Initializer):
             )
             return SoSState(c_values=c_values, step_idx=0)
 
+        raw_mt = (
+            self._checkpoint_model_type
+            or self._expected_model_type
+            or getattr(self._net, "model_type", "sr_initializer_net")
+        )
+        mt = raw_mt if isinstance(raw_mt, str) else "sr_initializer_net"
+
         tof = observation.tof_observed
-        if tof.dim() == 2:
-            raw_tof = tof.unsqueeze(0).unsqueeze(0)
-        elif tof.dim() == 3:
-            raw_tof = tof.unsqueeze(0) if tof.shape[0] != 1 else tof
+        if mt == "stage0_backproj_unet":
+            if tof.dim() == 2:
+                raw_tof = tof.unsqueeze(0).unsqueeze(0)
+            elif tof.dim() == 3:
+                raw_tof = tof.unsqueeze(0)
+            else:
+                raw_tof = tof
+            meta = observation.layout_metadata or {}
+            x_s = meta.get("x_s")
+            x_r = meta.get("x_r")
+            if x_s is None or x_r is None:
+                raise ValueError(
+                    "stage0_backproj_unet requires Observation.layout_metadata with 'x_s' and 'x_r'"
+                )
+            x_s = x_s.to(device)
+            x_r = x_r.to(device)
+            if x_s.dim() == 2:
+                x_s = x_s.unsqueeze(0)
+            if x_r.dim() == 2:
+                x_r = x_r.unsqueeze(0)
+            raw_tof = raw_tof.to(device)
+            self._net.eval()
+            with torch.no_grad():
+                delta_pred = self._net(raw_tof, x_s=x_s, x_r=x_r)
         else:
-            raw_tof = tof.reshape(1, 1, 32, 32)
-        if raw_tof.shape[-2:] != (32, 32):
-            raw_tof = F.interpolate(
-                raw_tof.float(),
-                size=(32, 32),
-                mode="bilinear",
-                align_corners=False,
-            )
-        raw_tof = raw_tof.to(device)
-        self._net.eval()
-        with torch.no_grad():
-            delta_pred = self._net(raw_tof)
+            if tof.dim() == 2:
+                raw_tof = tof.unsqueeze(0).unsqueeze(0)
+            elif tof.dim() == 3:
+                raw_tof = tof.unsqueeze(0) if tof.shape[0] != 1 else tof
+            else:
+                raw_tof = tof.reshape(1, 1, 32, 32)
+            if raw_tof.shape[-2:] != (32, 32):
+                raw_tof = F.interpolate(
+                    raw_tof.float(),
+                    size=(32, 32),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+            raw_tof = raw_tof.to(device)
+            self._net.eval()
+            with torch.no_grad():
+                delta_pred = self._net(raw_tof)
         norm_base = self._get_normalized_c_base()
         c0_normalized = c0_normalized_from_delta(norm_base, delta_pred)
         c0_physical = to_physical_sos(

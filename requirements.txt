@@ -5,6 +5,7 @@ scipy
 opencv-python
 torch
 torchvision
+monai>=1.3.0
 torch_geometric
 pandas
 mpld3
