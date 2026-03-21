@@ -3,11 +3,16 @@
 Uses FMM as forward-only oracle and derivative-free optimization.
 Stage 1A: optimize alpha only. Stage 1B: alpha + smooth correction.
 Builds c_map in scaled space and converts to physical before the solver.
+
+Frozen initializer inference uses ``tof_diff_normalized`` (same input contract as Stage 0).
+Physics loss, ``forward_tof``, residuals, and preflight shape/scale checks use
+``tof_tumor_raw`` only.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -24,6 +29,30 @@ from tomo.state.observation import Observation
 from tomo.training.stage1_parametrization import params_to_c_map_scaled
 from tomo.training.stage1_search import run_stage1a_search, run_stage1b_search
 from tomo.utils.units import physical_delta_to_scaled, to_physical_sos, to_scaled_sos
+
+logger = logging.getLogger(__name__)
+
+
+def _log_tof_stats(label: str, x: Any) -> None:
+    """Log min/max/mean/std for a tensor or array (finite values only)."""
+    if hasattr(x, "detach"):
+        arr = x.detach().float().cpu().numpy()
+    else:
+        arr = np.asarray(x, dtype=np.float64)
+    flat = arr.ravel()
+    flat = flat[np.isfinite(flat)]
+    if flat.size == 0:
+        logger.info("Stage 1 ToF stats [%s]: no finite values", label)
+        return
+    logger.info(
+        "Stage 1 ToF stats [%s]: min=%s max=%s mean=%s std=%s (n=%d)",
+        label,
+        float(np.min(flat)),
+        float(np.max(flat)),
+        float(np.mean(flat)),
+        float(np.std(flat)),
+        int(flat.size),
+    )
 
 
 def _run_stage1_preflight(
@@ -57,16 +86,21 @@ def _run_stage1_preflight(
     if batch is None:
         print("Stage 1 preflight failed: loader is empty (no batch).", file=sys.stderr)
         sys.exit(1)
-    for key in ("tof_tumor_raw", "x_s", "x_r"):
+    for key in ("tof_diff_normalized", "tof_tumor_raw", "x_s", "x_r"):
         if key not in batch:
             print(f"Stage 1 preflight failed: batch missing key '{key}'.", file=sys.stderr)
             sys.exit(1)
 
-    # 3. delta_c0 shape and finite
-    raw_tof_4d = _ensure_tof_tumor_4d(batch["tof_tumor_raw"]).to(initializer._device)
-    if raw_tof_4d.dim() == 3:
-        raw_tof_4d = raw_tof_4d.unsqueeze(1)
-    obs = Observation(tof_observed=raw_tof_4d.squeeze(0))
+    _log_tof_stats("initializer_input_tof_diff_normalized", batch["tof_diff_normalized"])
+    _log_tof_stats("physical_observation_tof_tumor_raw", batch["tof_tumor_raw"])
+
+    # 3. delta_c0 shape and finite (initializer: same input as Stage 0)
+    initializer_tof_4d = _ensure_tof_tumor_4d(batch["tof_diff_normalized"]).to(
+        initializer._device
+    )
+    if initializer_tof_4d.dim() == 3:
+        initializer_tof_4d = initializer_tof_4d.unsqueeze(1)
+    obs = Observation(tof_observed=initializer_tof_4d.squeeze(0))
     with torch.no_grad():
         state = initializer(obs)
     c0_phys = (
@@ -120,7 +154,7 @@ def _run_stage1_preflight(
         )
         sys.exit(1)
 
-    # 6. forward_tof shape matches tof_tumor_raw
+    # 6. forward_tof shape matches physical ToF (tof_tumor_raw)
     x_s = batch["x_s"][0]
     x_r = batch["x_r"][0]
     if hasattr(x_s, "detach"):
@@ -133,28 +167,29 @@ def _run_stage1_preflight(
         x_s = x_s.reshape(1, -1)
     if x_r.ndim == 1:
         x_r = x_r.reshape(1, -1)
-    raw_tof_np = batch["tof_tumor_raw"]
-    if hasattr(raw_tof_np, "detach"):
-        raw_tof_np = raw_tof_np.detach().cpu().numpy()
-    raw_tof_np = np.asarray(raw_tof_np)
-    if raw_tof_np.ndim == 4:
-        raw_tof_np = raw_tof_np[0].squeeze(0)
-    elif raw_tof_np.ndim == 3:
-        raw_tof_np = raw_tof_np[0]
+    physical_tof_np = batch["tof_tumor_raw"]
+    if hasattr(physical_tof_np, "detach"):
+        physical_tof_np = physical_tof_np.detach().cpu().numpy()
+    physical_tof_np = np.asarray(physical_tof_np)
+    if physical_tof_np.ndim == 4:
+        physical_tof_np = physical_tof_np[0].squeeze(0)
+    elif physical_tof_np.ndim == 3:
+        physical_tof_np = physical_tof_np[0]
     tof_pred = forward_tof(c_map_phys, x_s, x_r, scale_factor=tof_output_scale)
     if not np.isfinite(tof_pred).all():
         print("Stage 1 preflight failed: forward_tof returned non-finite values.", file=sys.stderr)
         sys.exit(1)
-    if tof_pred.shape != raw_tof_np.shape:
+    if tof_pred.shape != physical_tof_np.shape:
         print(
-            f"Stage 1 preflight failed: forward_tof shape {tof_pred.shape} != tof_tumor_raw shape {raw_tof_np.shape}.",
+            f"Stage 1 preflight failed: forward_tof shape {tof_pred.shape} != "
+            f"tof_tumor_raw shape {physical_tof_np.shape}.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    # 7. scale_factor validation: ToF order-of-magnitude check
+    # 7. scale_factor validation: ToF order-of-magnitude check (vs physical observation)
     pred_median = float(np.median(tof_pred))
-    obs_median = float(np.median(raw_tof_np))
+    obs_median = float(np.median(physical_tof_np))
     if obs_median <= 0:
         obs_median = np.finfo(np.float64).tiny
     ratio = pred_median / obs_median
@@ -176,6 +211,9 @@ def run_stage1_operator_baseline(
     run_stage1b: bool = True,
 ) -> dict[str, Any]:
     """Run Stage 1A and optionally Stage 1B calibration.
+
+    The frozen Stage 0 initializer is run on ``tof_diff_normalized``. Stage 1A/1B
+    physics objectives compare ``forward_tof`` predictions to ``tof_tumor_raw`` only.
 
     Args:
         full_config: Hydra-composed config with data, training (stage1a/stage1b),
@@ -267,15 +305,31 @@ def run_stage1_operator_baseline(
         if max_samples is not None and n_processed >= max_samples:
             break
 
-        raw_tof_batch = _ensure_tof_tumor_4d(batch["tof_tumor_raw"]).to(device)
-        batch_size = raw_tof_batch.shape[0]
+        _log_tof_stats(
+            f"batch_{batch_idx}_initializer_input_tof_diff_normalized",
+            batch["tof_diff_normalized"],
+        )
+        _log_tof_stats(
+            f"batch_{batch_idx}_physical_observation_tof_tumor_raw",
+            batch["tof_tumor_raw"],
+        )
+
+        initializer_tof_bchw = _ensure_tof_tumor_4d(batch["tof_diff_normalized"]).to(device)
+        physical_tof_bchw_shape = _ensure_tof_tumor_4d(batch["tof_tumor_raw"]).shape[0]
+        batch_size = physical_tof_bchw_shape
+        if initializer_tof_bchw.shape[0] != batch_size:
+            print(
+                "Stage 1 failed: batch size mismatch between tof_diff_normalized and tof_tumor_raw.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
         for sample_idx in range(batch_size):
             if max_samples is not None and n_processed >= max_samples:
                 break
 
-            raw_tof = raw_tof_batch[sample_idx : sample_idx + 1]
-            obs = Observation(tof_observed=raw_tof.squeeze(0))
+            initializer_tof_1chw = initializer_tof_bchw[sample_idx : sample_idx + 1]
+            obs = Observation(tof_observed=initializer_tof_1chw.squeeze(0))
             with torch.no_grad():
                 state = initializer(obs)
             c0_phys = (
@@ -286,12 +340,13 @@ def run_stage1_operator_baseline(
             delta_c0_phys = c0_phys - c_base_phys
             delta_c0_scaled = physical_delta_to_scaled(delta_c0_phys, min_sos, max_sos)
 
-            raw = batch["tof_tumor_raw"]
-            if raw.dim() == 2:
-                raw = raw.unsqueeze(0)
-            raw = raw[sample_idx : sample_idx + 1]
+            # Physics search / FMM objective: only tof_tumor_raw (no fallback from diff).
+            physical_tof_slice = batch["tof_tumor_raw"]
+            if physical_tof_slice.dim() == 2:
+                physical_tof_slice = physical_tof_slice.unsqueeze(0)
+            physical_tof_slice = physical_tof_slice[sample_idx : sample_idx + 1]
             sample_batch = {
-                "tof_tumor_raw": raw,
+                "tof_tumor_raw": physical_tof_slice,
                 "x_s": batch["x_s"][sample_idx : sample_idx + 1],
                 "x_r": batch["x_r"][sample_idx : sample_idx + 1],
             }
