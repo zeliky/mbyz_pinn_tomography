@@ -1,0 +1,554 @@
+
+<!DOCTYPE html
+  PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html><head>
+      <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+   <!--
+This HTML was auto-generated from MATLAB code.
+To make changes, update the MATLAB code and republish this document.
+      --><title>Anatomy</title><meta name="generator" content="MATLAB 9.10"><link rel="schema.DC" href="http://purl.org/dc/elements/1.1/"><meta name="DC.date" content="2022-05-29"><meta name="DC.source" content="Anatomy.m"><style type="text/css">
+html,body,div,span,applet,object,iframe,h1,h2,h3,h4,h5,h6,p,blockquote,pre,a,abbr,acronym,address,big,cite,code,del,dfn,em,font,img,ins,kbd,q,s,samp,small,strike,strong,tt,var,b,u,i,center,dl,dt,dd,ol,ul,li,fieldset,form,label,legend,table,caption,tbody,tfoot,thead,tr,th,td{margin:0;padding:0;border:0;outline:0;font-size:100%;vertical-align:baseline;background:transparent}body{line-height:1}ol,ul{list-style:none}blockquote,q{quotes:none}blockquote:before,blockquote:after,q:before,q:after{content:'';content:none}:focus{outine:0}ins{text-decoration:none}del{text-decoration:line-through}table{border-collapse:collapse;border-spacing:0}
+
+html { min-height:100%; margin-bottom:1px; }
+html body { height:100%; margin:0px; font-family:Arial, Helvetica, sans-serif; font-size:10px; color:#000; line-height:140%; background:#fff none; overflow-y:scroll; }
+html body td { vertical-align:top; text-align:left; }
+
+h1 { padding:0px; margin:0px 0px 25px; font-family:Arial, Helvetica, sans-serif; font-size:1.5em; color:#d55000; line-height:100%; font-weight:normal; }
+h2 { padding:0px; margin:0px 0px 8px; font-family:Arial, Helvetica, sans-serif; font-size:1.2em; color:#000; font-weight:bold; line-height:140%; border-bottom:1px solid #d6d4d4; display:block; }
+h3 { padding:0px; margin:0px 0px 5px; font-family:Arial, Helvetica, sans-serif; font-size:1.1em; color:#000; font-weight:bold; line-height:140%; }
+
+a { color:#005fce; text-decoration:none; }
+a:hover { color:#005fce; text-decoration:underline; }
+a:visited { color:#004aa0; text-decoration:none; }
+
+p { padding:0px; margin:0px 0px 20px; }
+img { padding:0px; margin:0px 0px 20px; border:none; }
+p img, pre img, tt img, li img, h1 img, h2 img { margin-bottom:0px; }
+
+ul { padding:0px; margin:0px 0px 20px 23px; list-style:square; }
+ul li { padding:0px; margin:0px 0px 7px 0px; }
+ul li ul { padding:5px 0px 0px; margin:0px 0px 7px 23px; }
+ul li ol li { list-style:decimal; }
+ol { padding:0px; margin:0px 0px 20px 0px; list-style:decimal; }
+ol li { padding:0px; margin:0px 0px 7px 23px; list-style-type:decimal; }
+ol li ol { padding:5px 0px 0px; margin:0px 0px 7px 0px; }
+ol li ol li { list-style-type:lower-alpha; }
+ol li ul { padding-top:7px; }
+ol li ul li { list-style:square; }
+
+.content { font-size:1.2em; line-height:140%; padding: 20px; }
+
+pre, code { font-size:12px; }
+tt { font-size: 1.2em; }
+pre { margin:0px 0px 20px; }
+pre.codeinput { padding:10px; border:1px solid #d3d3d3; background:#f7f7f7; }
+pre.codeoutput { padding:10px 11px; margin:0px 0px 20px; color:#4c4c4c; }
+pre.error { color:red; }
+
+@media print { pre.codeinput, pre.codeoutput { word-wrap:break-word; width:100%; } }
+
+span.keyword { color:#0000FF }
+span.comment { color:#228B22 }
+span.string { color:#A020F0 }
+span.untermstring { color:#B20000 }
+span.syscmd { color:#B28C00 }
+span.typesection { color:#A0522D }
+
+.footer { width:auto; padding:10px 0px; margin:25px 0px 0px; border-top:1px dotted #878787; font-size:0.8em; line-height:140%; font-style:italic; color:#878787; text-align:left; float:none; }
+.footer p { margin:0px; }
+.footer a { color:#878787; }
+.footer a:hover { color:#878787; text-decoration:underline; }
+.footer a:visited { color:#878787; }
+
+table th { padding:7px 5px; text-align:left; vertical-align:middle; border: 1px solid #d6d4d4; font-weight:bold; }
+table td { padding:7px 5px; text-align:left; vertical-align:top; border:1px solid #d6d4d4; }
+
+
+
+
+
+  </style></head><body><div class="content"><h2>Contents</h2><div><ul><li><a href="#2">Coordinate Properties %%</a></li><li><a href="#3">Color Properties %%</a></li><li><a href="#4">Value Properties %%</a></li><li><a href="#5">Grid Properties %%</a></li><li><a href="#8">Coordinate Properties %%</a></li><li><a href="#9">Color Properties %%</a></li><li><a href="#10">Value Properties %%</a></li><li><a href="#11">Grid Properties %%</a></li></ul></div><pre class="codeinput"><span class="keyword">classdef</span> Anatomy &lt; handle
+    <span class="keyword">properties</span> (SetAccess = private)
+</pre><h2 id="2">Coordinate Properties %%</h2><pre class="codeinput">        ra; rb; ang; x0; y0;
+</pre><h2 id="3">Color Properties %%</h2><pre class="codeinput">        R; G; B;
+</pre><h2 id="4">Value Properties %%</h2><pre class="codeinput">        value;
+</pre><h2 id="5">Grid Properties %%</h2><pre class="codeinput">        m, n; x; y; z; margin;
+</pre><pre class="codeinput">    <span class="keyword">end</span>
+    methods
+        <span class="keyword">function</span> setProperties(this)
+</pre><pre class="codeinput">            set(0,<span class="string">'DefaultAxesFontSize'</span>, 14)
+            set(0,<span class="string">'DefaultTextFontSize'</span>, 14)
+</pre><h2 id="8">Coordinate Properties %%</h2><pre class="codeinput">            this.ra=1; this.rb=1; this.ang=0; this.x0=5; this.y0=5;
+</pre><h2 id="9">Color Properties %%</h2><pre class="codeinput">            this.R=0.5; this.G=0.5; this.B=0.5;
+</pre><h2 id="10">Value Properties %%</h2><pre class="codeinput">            this.value = 2;
+</pre><h2 id="11">Grid Properties %%</h2><pre class="codeinput">            this.m = 60;
+            this.n = 60;
+            this.x = linspace(1,this.m,this.m);
+            this.y = linspace(1,this.n,this.n);
+            this.z=1;
+</pre><pre class="codeinput">        <span class="keyword">end</span>
+        <span class="keyword">function</span> setCoordinates(this, ra, rb, ang)
+            this.ra = ra; this.rb = rb; this.ang = ang;
+        <span class="keyword">end</span>
+        <span class="keyword">function</span> setCenter(this, x0, y0)
+            this.x0 = x0; this.y0 = y0;
+        <span class="keyword">end</span>
+        <span class="keyword">function</span> setColor(this, R, G, B)
+            this.R = R; this.G = G; this.B = B;
+        <span class="keyword">end</span>
+        <span class="keyword">function</span> setValue(this, value)
+            this.value = value;
+        <span class="keyword">end</span>
+        <span class="keyword">function</span> [V] = addTiltedEllipse(this, V)
+            [ex, ey] = ellipse(this.ra, this.rb, this.ang, this.x0, this.y0);
+            x = this.x; y = this.y;
+            inPoints = this.polygrid(ex, ey);
+            u = inPoints(:, 1); v = inPoints(:, 2);
+            <span class="keyword">for</span> i = 1:length(u)
+                k = find(x==u(i));
+                l = find(y==v(i));
+                V(k,l)=this.value;
+            <span class="keyword">end</span>
+<span class="comment">%             fill(ex, ey, [this.R,this.G,this.B], 'EdgeColor', [this.R,this.G,this.B])</span>
+        <span class="keyword">end</span>
+        <span class="keyword">function</span> chooseGridSize(this, m, n)
+            this.m = m;
+            this.n = n;
+            this.x = linspace(1,this.m,this.m);
+            this.y = linspace(1,this.n,this.n);
+            this.z=1;
+        <span class="keyword">end</span>
+        <span class="keyword">function</span> [inPoints] = polygrid(this, xv, yv)
+        <span class="comment">% https://www.mathworks.com/matlabcentral/mlc-downloads/downloads/submissions/41454/versions/9/previews/polygrid.m/index.html</span>
+        <span class="comment">% https://www.mathworks.com/matlabcentral/fileexchange/41454-grid-of-points-within-a-polygon</span>
+        x = this.x; y = this.y;
+        <span class="comment">%Find the bounding rectangle</span>
+            lower_x = 1; <span class="comment">%min(xv);</span>
+            higher_x = max(xv);
+
+            lower_y = 1; <span class="comment">%min(yv);</span>
+            higher_y = max(yv);
+        <span class="comment">%Create a grid of points within the bounding rectangle</span>
+            inc_x = x(2)-x(1); <span class="comment">%1/N;</span>
+            inc_y = y(2)-y(1); <span class="comment">%1/N;</span>
+
+            interval_x = lower_x:inc_x:higher_x;
+            interval_y = lower_y:inc_y:higher_y;
+
+            [bigGridX, bigGridY] = meshgrid(interval_x, interval_y);
+
+        <span class="comment">%Filter grid to get only points in polygon</span>
+            in = inpolygon(bigGridX(:), bigGridY(:), xv, yv);
+        <span class="comment">%Return the co-ordinates of the points that are in the polygon</span>
+            inPoints = [bigGridX(in), bigGridY(in)];
+        <span class="keyword">end</span>
+    <span class="keyword">end</span>
+<span class="keyword">end</span>
+<span class="keyword">function</span> [x y] =ellipse(ra,rb,ang,x0,y0,C,Nb)
+    <span class="comment">% function h=ellipse(ra,rb,ang,x0,y0,C,Nb)</span>
+    <span class="comment">% Ellipse adds ellipses to the current plot</span>
+    <span class="comment">%</span>
+    <span class="comment">% ELLIPSE(ra,rb,ang,x0,y0) adds an ellipse with semimajor axis of ra,</span>
+    <span class="comment">% a semimajor axis of radius rb, a semimajor axis of ang, centered at</span>
+    <span class="comment">% the point x0,y0.</span>
+    <span class="comment">%</span>
+    <span class="comment">% The length of ra, rb, and ang should be the same.</span>
+    <span class="comment">% If ra is a vector of length L and x0,y0 scalars, L ellipses</span>
+    <span class="comment">% are added at point x0,y0.</span>
+    <span class="comment">% If ra is a scalar and x0,y0 vectors of length M, M ellipse are with the same</span>
+    <span class="comment">% radii are added at the points x0,y0.</span>
+    <span class="comment">% If ra, x0, y0 are vectors of the same length L=M, M ellipses are added.</span>
+    <span class="comment">% If ra is a vector of length L and x0, y0 are  vectors of length</span>
+    <span class="comment">% M~=L, L*M ellipses are added, at each point x0,y0, L ellipses of radius ra.</span>
+    <span class="comment">%</span>
+    <span class="comment">% ELLIPSE(ra,rb,ang,x0,y0,C)</span>
+    <span class="comment">% adds ellipses of color C. C may be a string ('r','b',...) or the RGB value.</span>
+    <span class="comment">% If no color is specified, it makes automatic use of the colors specified by</span>
+    <span class="comment">% the axes ColorOrder property. For several circles C may be a vector.</span>
+    <span class="comment">%</span>
+    <span class="comment">% ELLIPSE(ra,rb,ang,x0,y0,C,Nb), Nb specifies the number of points</span>
+    <span class="comment">% used to draw the ellipse. The default value is 300. Nb may be used</span>
+    <span class="comment">% for each ellipse individually.</span>
+    <span class="comment">%</span>
+    <span class="comment">% h=ELLIPSE(...) returns the handles to the ellipses.</span>
+    <span class="comment">%</span>
+    <span class="comment">% usage exmple: the following produces a red ellipse centered at 1,1</span>
+    <span class="comment">% and tipped down at a 45 deg axis from the x axis</span>
+    <span class="comment">% ellipse(1,2,pi/4,1,1,'r')</span>
+    <span class="comment">%</span>
+    <span class="comment">% note that if ra=rb, ELLIPSE plots a circle</span>
+    <span class="comment">%</span>
+
+    <span class="comment">% written by D.G. Long, Brigham Young University, based on the</span>
+    <span class="comment">% CIRCLES.m original</span>
+    <span class="comment">% written by Peter Blattner, Institute of Microtechnology, University of</span>
+    <span class="comment">% Neuchatel, Switzerland, blattner@imt.unine.ch</span>
+
+    <span class="comment">% Check the number of input arguments</span>
+
+    <span class="keyword">if</span> nargin&lt;1,
+        ra=[];
+    <span class="keyword">end</span>;
+    <span class="keyword">if</span> nargin&lt;2,
+        rb=[];
+    <span class="keyword">end</span>;
+    <span class="keyword">if</span> nargin&lt;3,
+        ang=[];
+    <span class="keyword">end</span>;
+
+    <span class="keyword">if</span> nargin&lt;5,
+        x0=[];
+        y0=[];
+    <span class="keyword">end</span>;
+
+    <span class="keyword">if</span> nargin&lt;6,
+        C=[];
+    <span class="keyword">end</span>
+
+    <span class="keyword">if</span> nargin&lt;7,
+        Nb=[];
+    <span class="keyword">end</span>
+
+    <span class="comment">% set up the default values</span>
+
+    <span class="keyword">if</span> isempty(ra),ra=1;<span class="keyword">end</span>;
+    <span class="keyword">if</span> isempty(rb),rb=1;<span class="keyword">end</span>;
+    <span class="keyword">if</span> isempty(ang),ang=0;<span class="keyword">end</span>;
+    <span class="keyword">if</span> isempty(x0),x0=0;<span class="keyword">end</span>;
+    <span class="keyword">if</span> isempty(y0),y0=0;<span class="keyword">end</span>;
+    <span class="keyword">if</span> isempty(Nb),Nb=300;<span class="keyword">end</span>;
+    <span class="keyword">if</span> isempty(C),C=get(gca,<span class="string">'colororder'</span>);<span class="keyword">end</span>;
+
+    <span class="comment">% work on the variable sizes</span>
+
+    x0=x0(:);
+    y0=y0(:);
+    ra=ra(:);
+    rb=rb(:);
+    ang=ang(:);
+    Nb=Nb(:);
+
+    <span class="keyword">if</span> isstr(C),C=C(:);<span class="keyword">end</span>;
+
+    <span class="keyword">if</span> length(ra)~=length(rb),
+        error(<span class="string">'length(ra)~=length(rb)'</span>);
+    <span class="keyword">end</span>;
+    <span class="keyword">if</span> length(x0)~=length(y0),
+        error(<span class="string">'length(x0)~=length(y0)'</span>);
+    <span class="keyword">end</span>;
+
+    <span class="comment">% how many inscribed elllipses are plotted</span>
+
+    <span class="keyword">if</span> length(ra)~=length(x0)
+        maxk=length(ra)*length(x0);
+    <span class="keyword">else</span>
+        maxk=length(ra);
+    <span class="keyword">end</span>;
+
+    <span class="comment">% drawing loop</span>
+
+        <span class="keyword">for</span> k=1:maxk
+
+            <span class="keyword">if</span> length(x0)==1
+                xpos=x0;
+                ypos=y0;
+                radm=ra(k);
+                radn=rb(k);
+                <span class="keyword">if</span> length(ang)==1
+                    an=ang;
+                <span class="keyword">else</span>
+                    an=ang(k);
+                <span class="keyword">end</span>;
+            <span class="keyword">elseif</span> length(ra)==1
+                xpos=x0(k);
+                ypos=y0(k);
+                radm=ra;
+                radn=rb;
+                an=ang;
+            <span class="keyword">elseif</span> length(x0)==length(ra)
+                xpos=x0(k);
+                ypos=y0(k);
+                radm=ra(k);
+                radn=rb(k);
+                an=ang(k);
+            <span class="keyword">else</span>
+                rada=ra(fix((k-1)/size(x0,1))+1);
+                radb=rb(fix((k-1)/size(x0,1))+1);
+                an=ang(fix((k-1)/size(x0,1))+1);
+                xpos=x0(rem(k-1,size(x0,1))+1);
+                ypos=y0(rem(k-1,size(y0,1))+1);
+            <span class="keyword">end</span>;
+
+            co=cos(an);
+            si=sin(an);
+            the=linspace(0,2*pi,Nb(rem(k-1,size(Nb,1))+1,:)+1);
+            x=radm*cos(the)*co-si*radn*sin(the)+xpos;
+            y=radm*cos(the)*si+co*radn*sin(the)+ypos;
+            <span class="comment">%   p=line(radm*cos(the)*co-si*radn*sin(the)+xpos,radm*cos(the)*si+co*radn*sin(the)+ypos);</span>
+            <span class="comment">%   set(p,'color',C(rem(k-1,size(C,1))+1,:));</span>
+
+            <span class="keyword">if</span> nargout &gt; 0
+                <span class="comment">%     h(k)=p;</span>
+            <span class="keyword">end</span>
+
+        <span class="keyword">end</span>
+<span class="keyword">end</span>
+</pre><pre class="codeoutput">
+ans = 
+
+  Anatomy with properties:
+
+        ra: []
+        rb: []
+       ang: []
+        x0: []
+        y0: []
+         R: []
+         G: []
+         B: []
+     value: []
+         m: []
+         n: []
+         x: []
+         y: []
+         z: []
+    margin: []
+
+</pre><p class="footer"><br><a href="https://www.mathworks.com/products/matlab/">Published with MATLAB&reg; R2021a</a><br></p></div><!--
+##### SOURCE BEGIN #####
+classdef Anatomy < handle
+    properties (SetAccess = private)
+        %% Coordinate Properties %%
+        ra; rb; ang; x0; y0;
+        %% Color Properties %%
+        R; G; B;
+        %% Value Properties %%
+        value;
+        %% Grid Properties %%
+        m, n; x; y; z; margin;  
+    end
+    methods
+        function setProperties(this)
+            set(0,'DefaultAxesFontSize', 14)
+            set(0,'DefaultTextFontSize', 14)
+            %% Coordinate Properties %%
+            this.ra=1; this.rb=1; this.ang=0; this.x0=5; this.y0=5;
+            %% Color Properties %%
+            this.R=0.5; this.G=0.5; this.B=0.5;
+            %% Value Properties %%
+            this.value = 2;
+            %% Grid Properties %%
+            this.m = 60;
+            this.n = 60;
+            this.x = linspace(1,this.m,this.m);
+            this.y = linspace(1,this.n,this.n);
+            this.z=1;
+        end
+        function setCoordinates(this, ra, rb, ang)
+            this.ra = ra; this.rb = rb; this.ang = ang;
+        end
+        function setCenter(this, x0, y0)
+            this.x0 = x0; this.y0 = y0;
+        end
+        function setColor(this, R, G, B)      
+            this.R = R; this.G = G; this.B = B;
+        end
+        function setValue(this, value)      
+            this.value = value;
+        end
+        function [V] = addTiltedEllipse(this, V)
+            [ex, ey] = ellipse(this.ra, this.rb, this.ang, this.x0, this.y0);
+            x = this.x; y = this.y;
+            inPoints = this.polygrid(ex, ey);
+            u = inPoints(:, 1); v = inPoints(:, 2);
+            for i = 1:length(u)
+                k = find(x==u(i));
+                l = find(y==v(i));
+                V(k,l)=this.value;
+            end
+%             fill(ex, ey, [this.R,this.G,this.B], 'EdgeColor', [this.R,this.G,this.B])
+        end
+        function chooseGridSize(this, m, n)
+            this.m = m;
+            this.n = n;
+            this.x = linspace(1,this.m,this.m);
+            this.y = linspace(1,this.n,this.n);
+            this.z=1;
+        end
+        function [inPoints] = polygrid(this, xv, yv)
+        % https://www.mathworks.com/matlabcentral/mlc-downloads/downloads/submissions/41454/versions/9/previews/polygrid.m/index.html
+        % https://www.mathworks.com/matlabcentral/fileexchange/41454-grid-of-points-within-a-polygon
+        x = this.x; y = this.y;
+        %Find the bounding rectangle
+            lower_x = 1; %min(xv);
+            higher_x = max(xv);
+
+            lower_y = 1; %min(yv);
+            higher_y = max(yv);
+        %Create a grid of points within the bounding rectangle
+            inc_x = x(2)-x(1); %1/N;
+            inc_y = y(2)-y(1); %1/N;
+
+            interval_x = lower_x:inc_x:higher_x;
+            interval_y = lower_y:inc_y:higher_y;
+
+            [bigGridX, bigGridY] = meshgrid(interval_x, interval_y);
+
+        %Filter grid to get only points in polygon
+            in = inpolygon(bigGridX(:), bigGridY(:), xv, yv);
+        %Return the co-ordinates of the points that are in the polygon
+            inPoints = [bigGridX(in), bigGridY(in)];
+        end
+    end
+end
+function [x y] =ellipse(ra,rb,ang,x0,y0,C,Nb)
+    % function h=ellipse(ra,rb,ang,x0,y0,C,Nb)
+    % Ellipse adds ellipses to the current plot
+    %
+    % ELLIPSE(ra,rb,ang,x0,y0) adds an ellipse with semimajor axis of ra,
+    % a semimajor axis of radius rb, a semimajor axis of ang, centered at
+    % the point x0,y0.
+    %
+    % The length of ra, rb, and ang should be the same.
+    % If ra is a vector of length L and x0,y0 scalars, L ellipses
+    % are added at point x0,y0.
+    % If ra is a scalar and x0,y0 vectors of length M, M ellipse are with the same
+    % radii are added at the points x0,y0.
+    % If ra, x0, y0 are vectors of the same length L=M, M ellipses are added.
+    % If ra is a vector of length L and x0, y0 are  vectors of length
+    % M~=L, L*M ellipses are added, at each point x0,y0, L ellipses of radius ra.
+    %
+    % ELLIPSE(ra,rb,ang,x0,y0,C)
+    % adds ellipses of color C. C may be a string ('r','b',...) or the RGB value.
+    % If no color is specified, it makes automatic use of the colors specified by
+    % the axes ColorOrder property. For several circles C may be a vector.
+    %
+    % ELLIPSE(ra,rb,ang,x0,y0,C,Nb), Nb specifies the number of points
+    % used to draw the ellipse. The default value is 300. Nb may be used
+    % for each ellipse individually.
+    %
+    % h=ELLIPSE(...) returns the handles to the ellipses.
+    %
+    % usage exmple: the following produces a red ellipse centered at 1,1
+    % and tipped down at a 45 deg axis from the x axis
+    % ellipse(1,2,pi/4,1,1,'r')
+    %
+    % note that if ra=rb, ELLIPSE plots a circle
+    %
+
+    % written by D.G. Long, Brigham Young University, based on the
+    % CIRCLES.m original
+    % written by Peter Blattner, Institute of Microtechnology, University of
+    % Neuchatel, Switzerland, blattner@imt.unine.ch
+
+    % Check the number of input arguments
+
+    if nargin<1,
+        ra=[];
+    end;
+    if nargin<2,
+        rb=[];
+    end;
+    if nargin<3,
+        ang=[];
+    end;
+
+    if nargin<5,
+        x0=[];
+        y0=[];
+    end;
+
+    if nargin<6,
+        C=[];
+    end
+
+    if nargin<7,
+        Nb=[];
+    end
+
+    % set up the default values
+
+    if isempty(ra),ra=1;end;
+    if isempty(rb),rb=1;end;
+    if isempty(ang),ang=0;end;
+    if isempty(x0),x0=0;end;
+    if isempty(y0),y0=0;end;
+    if isempty(Nb),Nb=300;end;
+    if isempty(C),C=get(gca,'colororder');end;
+
+    % work on the variable sizes
+
+    x0=x0(:);
+    y0=y0(:);
+    ra=ra(:);
+    rb=rb(:);
+    ang=ang(:);
+    Nb=Nb(:);
+
+    if isstr(C),C=C(:);end;
+
+    if length(ra)~=length(rb),
+        error('length(ra)~=length(rb)');
+    end;
+    if length(x0)~=length(y0),
+        error('length(x0)~=length(y0)');
+    end;
+
+    % how many inscribed elllipses are plotted
+
+    if length(ra)~=length(x0)
+        maxk=length(ra)*length(x0);
+    else
+        maxk=length(ra);
+    end;
+
+    % drawing loop
+
+        for k=1:maxk
+
+            if length(x0)==1
+                xpos=x0;
+                ypos=y0;
+                radm=ra(k);
+                radn=rb(k);
+                if length(ang)==1
+                    an=ang;
+                else
+                    an=ang(k);
+                end;
+            elseif length(ra)==1
+                xpos=x0(k);
+                ypos=y0(k);
+                radm=ra;
+                radn=rb;
+                an=ang;
+            elseif length(x0)==length(ra)
+                xpos=x0(k);
+                ypos=y0(k);
+                radm=ra(k);
+                radn=rb(k);
+                an=ang(k);
+            else
+                rada=ra(fix((k-1)/size(x0,1))+1);
+                radb=rb(fix((k-1)/size(x0,1))+1);
+                an=ang(fix((k-1)/size(x0,1))+1);
+                xpos=x0(rem(k-1,size(x0,1))+1);
+                ypos=y0(rem(k-1,size(y0,1))+1);
+            end;
+
+            co=cos(an);
+            si=sin(an);
+            the=linspace(0,2*pi,Nb(rem(k-1,size(Nb,1))+1,:)+1);
+            x=radm*cos(the)*co-si*radn*sin(the)+xpos;
+            y=radm*cos(the)*si+co*radn*sin(the)+ypos;
+            %   p=line(radm*cos(the)*co-si*radn*sin(the)+xpos,radm*cos(the)*si+co*radn*sin(the)+ypos);
+            %   set(p,'color',C(rem(k-1,size(C,1))+1,:));
+
+            if nargout > 0
+                %     h(k)=p;
+            end
+
+        end
+end
+##### SOURCE END #####
+--></body></html>
