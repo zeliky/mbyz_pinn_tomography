@@ -16,6 +16,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from tomo.data.datamodule import TomographyDataModule
+from tomo.data.normalization_metadata import resolve_data_config
 from tomo.initializers.unet_initializer import (
     c0_normalized_from_delta,
     delta_target_from_anatomy,
@@ -108,6 +109,7 @@ def run_stage0(
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
+    data_config = resolve_data_config(dict(data_config))
     min_sos = data_config["min_sos"]
     max_sos = data_config["max_sos"]
     c_base_phys = data_config.get("c_base_phys", data_config.get("c_base", 1.5))

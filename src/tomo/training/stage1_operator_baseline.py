@@ -16,6 +16,7 @@ import numpy as np
 import torch
 
 from tomo.data.datamodule import TomographyDataModule
+from tomo.data.normalization_metadata import resolve_data_config
 from tomo.initializers.unet_initializer import UNetInitializer
 from tomo.training.stage0_initializer import _ensure_tof_tumor_4d
 from tomo.operators.matlab_fmm_wrapper import forward_tof
@@ -187,15 +188,15 @@ def run_stage1_operator_baseline(
         Aggregated results dict with per-sample and summary metrics.
     """
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_config = full_config.get("data", full_config)
+    data_config = resolve_data_config(dict(full_config.get("data", full_config)))
     training_config = full_config.get("training", full_config)
     stage = training_config.get("stage", "stage1a")
 
     c_base_phys = training_config.get("c_base_phys", training_config.get("c_base", 1.5))
     c_min_phys = training_config.get("c_min_phys", training_config.get("c_min", 1.45))
     c_max_phys = training_config.get("c_max_phys", training_config.get("c_max", 1.8))
-    min_sos = data_config.get("min_sos", 0.1)
-    max_sos = data_config.get("max_sos", 2.1)
+    min_sos = data_config["min_sos"]
+    max_sos = data_config["max_sos"]
     # Single source of truth: c_base_phys; derive scaled at runtime
     c_base_scaled = to_scaled_sos(c_base_phys, min_sos, max_sos)
 

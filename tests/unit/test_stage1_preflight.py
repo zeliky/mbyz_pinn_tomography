@@ -20,6 +20,7 @@ def test_stage1_preflight_fails_when_checkpoint_missing() -> None:
     full_config = {
         "data": {
             "data_root": ".",
+            "normalization_source": "config",
             "min_sos": 0.1,
             "max_sos": 2.1,
             "min_tof": 0.0,

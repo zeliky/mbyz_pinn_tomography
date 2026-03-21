@@ -1,6 +1,11 @@
 # Symlink `inputData` at repo root to the MATLAB `dataset_<date>_<tag>/` folder.
 data_root: ../inputData
 
+# auto: use normalization.json if present under data_root, else min_* / max_* below.
+# dataset: require normalization.json (from MATLAB write_dataset_normalization_metadata).
+# config: always use YAML min_* / max_* (ignore manifest).
+normalization_source: auto
+
 min_sos: 0.1
 max_sos: 2.1
 c_base_phys: 1.5  # physical fluid speed (same units as min_sos/max_sos); c_base kept as fallback

@@ -116,6 +116,7 @@ function runProduction1()
     end
 
     fprintf('\nProduction finished in %s\n', sec2hms(toc(start_time)));
+    write_dataset_normalization_metadata(cfg.output_root);
     fprintf('\nPoint repo-root inputData symlink at this run (from repo root):\n  ln -sfn %s inputData\n', cfg.output_root);
 end
 

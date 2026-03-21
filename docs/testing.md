@@ -8,7 +8,7 @@ Help later agents answer:
 
 This repo currently has a small set of unit and smoke tests. Some tests depend on:
 - The native FMM solver (`py2mat.msfm2d` / `msfm2d`)
-- Availability of MATLAB-generated datasets: symlink repo-root `inputData` to `dataset_<date>_<tag>/` (see `tof_generator/runProduction1.m`)
+- Availability of MATLAB-generated datasets: symlink repo-root `inputData` to `dataset_<date>_<tag>/` (see `tof_generator/runProduction1.m`). After `runProduction1`, MATLAB writes `normalization.json` at the dataset root (global min/max of `sos_map` and `tof_tumor_raw` over train/validate/test). Python `data.normalization_source`: `auto` uses that file when present, `dataset` requires it, `config` uses only YAML bounds. Using stats over all splits is convenient but introduces mild leakage vs train-only stats; see `configs/data/default.yaml`.
 
 ## How to run
 - From repo root:
@@ -32,6 +32,8 @@ This repo currently has a small set of unit and smoke tests. Some tests depend o
     - `src/tomo/operators/propagation.py`
 - `tests/unit/test_stage1_preflight.py`
   - Validates that `run_stage1_operator_baseline()` exits with code `1` when a checkpoint path is missing
+- `tests/unit/test_normalization_metadata.py`
+  - `normalization.json` parsing, `resolve_data_config` modes (`auto` / `config` / `dataset`), and `TomographyDataModule` with `normalization_source: dataset` when manifest is missing
 
 ## Native FMM-dependent tests (skipped if msfm2d missing)
 - `tests/unit/test_forward_tof.py`
@@ -51,6 +53,7 @@ This repo currently has a small set of unit and smoke tests. Some tests depend o
     - `inputData/train/mat`, `inputData/train/previews`
     - `inputData/validate/mat`, `inputData/validate/previews`
     - `inputData/test/mat`, `inputData/test/previews`
+    - `inputData/normalization.json` (recommended for `normalization_source: auto` or `dataset`)
 
 ## Integration tests gap
 - `tests/integration/` directory is currently missing.

@@ -18,6 +18,7 @@ def _default_data_config() -> dict:
     root = Path(__file__).resolve().parents[2]
     return {
         "data_root": str(root / "inputData"),
+        "normalization_source": "auto",
         "min_sos": 0.1,
         "max_sos": 2.1,
         "min_tof": 0.0,

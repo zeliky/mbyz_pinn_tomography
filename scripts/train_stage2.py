@@ -16,6 +16,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 from tomo.data.datamodule import TomographyDataModule
+from tomo.data.normalization_metadata import resolve_data_config
 from tomo.stage2.stage2_env import Stage2Env
 from tomo.stage2.stage2_policy import Stage2Policy
 from tomo.stage2.stage2_trainer import Stage2Trainer
@@ -34,7 +35,7 @@ def main() -> None:
     device = torch.device(device_name if torch.cuda.is_available() else "cpu")
 
     full_cfg = OmegaConf.to_container(cfg, resolve=True)
-    data_cfg = full_cfg.get("data", full_cfg)
+    data_cfg = resolve_data_config(dict(full_cfg.get("data", full_cfg)))
     train_cfg = full_cfg.get("training", full_cfg)
     roi_cfg = train_cfg.get("roi", {})
     graph_cfg = train_cfg.get("graph", {})
@@ -54,13 +55,9 @@ def main() -> None:
     dm = TomographyDataModule(data_cfg)
     dm.setup()
 
-    c_base = data_cfg.get("c_base", 1.5)
-    c_min = train_cfg.get("c_min_phys", data_cfg.get("min_sos", 0.1) * 10)
-    c_max = train_cfg.get("c_max_phys", data_cfg.get("max_sos", 2.1) * 0.9)
-    if c_min > 2:
-        c_min = 1.45
-    if c_max > 10:
-        c_max = 1.8
+    c_base = data_cfg.get("c_base_phys", data_cfg.get("c_base", 1.5))
+    c_min = float(train_cfg.get("c_min_phys", train_cfg.get("c_min", 1.45)))
+    c_max = float(train_cfg.get("c_max_phys", train_cfg.get("c_max", 1.8)))
 
     scale_factor = train_cfg.get("scale_factor", 1.0)
     coord_range = train_cfg.get("coord_range")

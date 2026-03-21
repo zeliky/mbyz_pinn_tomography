@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from tomo.data.dataset import TofDataset
+from tomo.data.normalization_metadata import resolve_data_config
 
 
 def _collate_fn(batch: list[dict[str, Any]]) -> dict[str, Any]:
@@ -22,7 +23,7 @@ class TomographyDataModule:
     """Builds TofDatasets from `data` config: `data_root`, normalization bounds, loader settings."""
 
     def __init__(self, config: dict[str, Any]) -> None:
-        self._config = dict(config)
+        self._config = resolve_data_config(dict(config))
         self._train_dataset: TofDataset | None = None
         self._val_dataset: TofDataset | None = None
         self._test_dataset: TofDataset | None = None
