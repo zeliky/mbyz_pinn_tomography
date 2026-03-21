@@ -1,4 +1,4 @@
-"""UNet initializer: SR (32x32) or backprojection+U-Net from measurement grid [S,R].
+"""UNet initializer: SR (tof_grid) or backprojection+U-Net from measurement grid [S,R].
 
 Stage 0: predicts residual delta_c0 above c_base; UNetInitializer builds c0 = c_base + delta_c0_pred.
 Backprojection model requires Observation.layout_metadata with x_s, x_r tensors.
@@ -6,6 +6,7 @@ Backprojection model requires Observation.layout_metadata with x_s, x_r tensors.
 
 from __future__ import annotations
 
+import math
 import warnings
 from typing import Any, ClassVar
 
@@ -106,12 +107,26 @@ def _infer_legacy_model_type(state: dict[str, Any]) -> str:
     return "sr_initializer_net"
 
 
+def _num_decoder_upsample_stages(
+    tof_input_size: int, output_size: int
+) -> int:
+    """Decoder upsample stages so bottleneck * 2^k = output. Bottleneck = tof / 8."""
+    ratio = (output_size * 8) / tof_input_size
+    k = int(round(math.log2(ratio)))
+    if k < 1 or 2**k != ratio:
+        raise ValueError(
+            f"Unsupported tof_output combo: tof={tof_input_size} output={output_size} "
+            f"-> ratio={ratio} must be power of 2 (got k={k}, 2^k={2**k})."
+        )
+    return k
+
+
 class SRInitializerNet(nn.Module):
     """
-    Super-resolution net: raw_tof [B, 1, 32, 32] -> delta_c0 [B, 1, 128, 128].
-    Output is normalized non-negative residual above c_base; call sites compute
-    normalized_c0 = normalized_c_base + delta_c0. Encoder-decoder with optional
-    TOFGuidedAttention in bottleneck.
+    Super-resolution net: raw_tof [B, 1, H_tof, W_tof] -> delta_c0 [B, 1, H_out, W_out].
+    Output is normalized non-negative residual above c_base. Encoder-decoder with
+    optional TOFGuidedAttention in bottleneck. Decoder depth is computed from
+    tof_input and output sizes so output matches anatomy grid.
     """
 
     model_type: ClassVar[str] = "sr_initializer_net"
@@ -123,12 +138,28 @@ class SRInitializerNet(nn.Module):
         base_filters: int = 64,
         use_attention: bool = False,
         use_residual: bool = True,
+        tof_input_height: int = 64,
+        tof_input_width: int = 64,
+        output_height: int = 128,
+        output_width: int = 128,
     ) -> None:
         super().__init__()
         self.use_attention = use_attention
         self.use_residual = use_residual
+        self._tof_input_height = tof_input_height
+        self._tof_input_width = tof_input_width
+        self._output_height = output_height
+        self._output_width = output_width
 
-        # Encoder: 32 -> 16 -> 8 -> 4
+        k_h = _num_decoder_upsample_stages(tof_input_height, output_height)
+        k_w = _num_decoder_upsample_stages(tof_input_width, output_width)
+        if k_h != k_w:
+            raise ValueError(
+                f"tof_input/output must yield same k: got k_h={k_h} k_w={k_w}."
+            )
+        self._num_upsample_stages = k_h
+
+        # Encoder: 3 stride-2 stages -> bottleneck = tof / 8
         self.enc_conv1 = nn.Sequential(
             nn.Conv2d(input_channels, base_filters, 3, padding=1),
             nn.BatchNorm2d(base_filters),
@@ -162,32 +193,33 @@ class SRInitializerNet(nn.Module):
                 )
         self.bottleneck = nn.Sequential(*bottleneck_layers)
 
-        # Decoder: 4 -> 8 -> 16 -> 32 -> 64 -> 128
-        self.dec_conv1 = nn.Sequential(
-            nn.ConvTranspose2d(base_filters * 8, base_filters * 4, 4, stride=2, padding=1),
-            nn.BatchNorm2d(base_filters * 4),
-            nn.ReLU(inplace=True),
-        )
-        self.dec_conv2 = nn.Sequential(
-            nn.ConvTranspose2d(base_filters * 4, base_filters * 2, 4, stride=2, padding=1),
-            nn.BatchNorm2d(base_filters * 2),
-            nn.ReLU(inplace=True),
-        )
-        self.dec_conv3 = nn.Sequential(
-            nn.ConvTranspose2d(base_filters * 2, base_filters, 4, stride=2, padding=1),
-            nn.BatchNorm2d(base_filters),
-            nn.ReLU(inplace=True),
-        )
-        self.dec_conv4 = nn.Sequential(
-            nn.ConvTranspose2d(base_filters, base_filters // 2, 4, stride=2, padding=1),
-            nn.BatchNorm2d(base_filters // 2),
-            nn.ReLU(inplace=True),
-        )
-        self.dec_conv5 = nn.Sequential(
-            nn.ConvTranspose2d(base_filters // 2, base_filters // 4, 4, stride=2, padding=1),
-            nn.BatchNorm2d(base_filters // 4),
-            nn.ReLU(inplace=True),
-        )
+        # Decoder: k upsample stages. Channel progression: 8b -> 4b -> 2b -> b -> b/2 -> b/4
+        ch_pairs = [
+            (base_filters * 8, base_filters * 4),
+            (base_filters * 4, base_filters * 2),
+            (base_filters * 2, base_filters),
+            (base_filters, base_filters // 2),
+            (base_filters // 2, base_filters // 4),
+        ]
+        self.dec_convs = nn.ModuleList()
+        for i in range(self._num_upsample_stages):
+            inc, outc = ch_pairs[i]
+            self.dec_convs.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(inc, outc, 4, stride=2, padding=1),
+                    nn.BatchNorm2d(outc),
+                    nn.ReLU(inplace=True),
+                )
+            )
+        last_out = ch_pairs[self._num_upsample_stages - 1][1]
+        if last_out != base_filters // 4:
+            self.dec_bridge = nn.Sequential(
+                nn.Conv2d(last_out, base_filters // 4, 3, padding=1),
+                nn.BatchNorm2d(base_filters // 4),
+                nn.ReLU(inplace=True),
+            )
+        else:
+            self.dec_bridge = nn.Identity()
         self.final_conv = nn.Sequential(
             nn.Conv2d(base_filters // 4, output_channels, 3, padding=1),
             nn.Sigmoid(),
@@ -205,7 +237,7 @@ class SRInitializerNet(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, raw_tof: torch.Tensor) -> torch.Tensor:
-        """Input [B, 1, 32, 32], output delta_c0 [B, 1, 128, 128] in [0, 1]."""
+        """Input [B, 1, H_tof, W_tof], output delta_c0 [B, 1, H_out, W_out] in [0, 1]."""
         tof_input = raw_tof
         enc1 = self.enc_conv1(raw_tof)
         enc2 = self.enc_conv2(enc1)
@@ -218,15 +250,20 @@ class SRInitializerNet(nn.Module):
         else:
             bottleneck = self.bottleneck(enc4)
 
-        dec1 = self.dec_conv1(bottleneck)
-        dec2 = self.dec_conv2(dec1)
-        dec3 = self.dec_conv3(dec2)
-        dec4 = self.dec_conv4(dec3)
-        dec5 = self.dec_conv5(dec4)
-        return self.final_conv(dec5)
+        x = bottleneck
+        for dec in self.dec_convs:
+            x = dec(x)
+        x = self.dec_bridge(x)
+        return self.final_conv(x)
 
     def checkpoint_metadata(self) -> dict[str, Any]:
-        return {"model_type": self.model_type}
+        return {
+            "model_type": self.model_type,
+            "tof_input_height": self._tof_input_height,
+            "tof_input_width": self._tof_input_width,
+            "output_height": self._output_height,
+            "output_width": self._output_width,
+        }
 
 
 class UNetInitializer(Initializer):
@@ -246,6 +283,8 @@ class UNetInitializer(Initializer):
         device: torch.device | None = None,
         net: nn.Module | None = None,
         expected_model_type: str | None = None,
+        tof_input_height: int = 64,
+        tof_input_width: int = 64,
     ) -> None:
         self.num_nodes = num_nodes
         self.c0_fallback = c0_fallback
@@ -257,6 +296,8 @@ class UNetInitializer(Initializer):
         self._normalized_c_base: float | None = None
         self._expected_model_type = expected_model_type
         self._checkpoint_model_type: str | None = None
+        self._tof_input_height = tof_input_height
+        self._tof_input_width = tof_input_width
         if net is not None:
             self._checkpoint_model_type = str(
                 getattr(net, "model_type", self._checkpoint_model_type or "sr_initializer_net")
@@ -353,16 +394,17 @@ class UNetInitializer(Initializer):
             with torch.no_grad():
                 delta_pred = self._net(raw_tof, x_s=x_s, x_r=x_r)
         else:
+            target_hw = (self._tof_input_height, self._tof_input_width)
             if tof.dim() == 2:
                 raw_tof = tof.unsqueeze(0).unsqueeze(0)
             elif tof.dim() == 3:
                 raw_tof = tof.unsqueeze(0) if tof.shape[0] != 1 else tof
             else:
-                raw_tof = tof.reshape(1, 1, 32, 32)
-            if raw_tof.shape[-2:] != (32, 32):
+                raw_tof = tof
+            if raw_tof.shape[-2:] != target_hw:
                 raw_tof = F.interpolate(
                     raw_tof.float(),
-                    size=(32, 32),
+                    size=target_hw,
                     mode="bilinear",
                     align_corners=False,
                 )

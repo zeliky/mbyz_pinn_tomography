@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""CLI: build backprojection operator .npz from dataset .mat files or a single .mat."""
+"""CLI: build backprojection operator .npz from dataset .mat files or a single .mat.
+
+S and R (sources, receivers) are inferred from x_s, x_r in the .mat. For 64x64 TOF data,
+ensure the dataset has 64 sources and 64 receivers; regenerate when changing TOF grid size.
+"""
 
 from __future__ import annotations
 

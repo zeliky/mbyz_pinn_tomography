@@ -3,6 +3,10 @@
 # Or: --mat path/to/sample.mat
 # If Stage 1 uses coord_range (physical->grid), pass the same --coord_lo/--coord_hi when building.
 #
+# The operator S,R (sources/receivers) come from the .mat x_s, x_r. For 64x64 TOF data,
+# use a dataset with 64 sources and 64 receivers; the script infers S,R from the mat files.
+# Regenerate artifacts/backprojection_operator.npz when changing TOF grid size (e.g. 32->64).
+#
 # Switch Stage 0: defaults in config_stage0.yaml -> initializer: stage0_backproj_unet
 _target_: tomo.models.stage0_backproj_unet.Stage0BackprojUNet
 operator_path: artifacts/backprojection_operator.npz

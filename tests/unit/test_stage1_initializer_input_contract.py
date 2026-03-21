@@ -69,7 +69,7 @@ class _RecordingFakeInitializer:
     def __call__(self, observation) -> SoSState:
         self.observed_tof.append(observation.tof_observed.detach().cpu().clone())
         c = torch.full(
-            (128, 128),
+            (ANATOMY_H, ANATOMY_W),
             self._c_base,
             dtype=torch.float32,
             device=self._device,
@@ -77,11 +77,15 @@ class _RecordingFakeInitializer:
         return SoSState(c_values=c.reshape(-1), step_idx=0, c_map_2d=c)
 
 
+TOF_H, TOF_W = 64, 64
+ANATOMY_H, ANATOMY_W = 128, 128
+
+
 def _make_batch(*, diff_fill: float, raw_fill: float) -> dict[str, torch.Tensor]:
-    tof_diff = torch.full((1, 1, 32, 32), diff_fill, dtype=torch.float32)
-    tof_raw = torch.full((1, 1, 32, 32), raw_fill, dtype=torch.float32)
+    tof_diff = torch.full((1, 1, TOF_H, TOF_W), diff_fill, dtype=torch.float32)
+    tof_raw = torch.full((1, 1, TOF_H, TOF_W), raw_fill, dtype=torch.float32)
     x_s = torch.zeros((1, 1, 2), dtype=torch.float64)
-    x_r = torch.ones((1, 1, 2), dtype=torch.float64) * 31.0
+    x_r = torch.ones((1, 1, 2), dtype=torch.float64) * (TOF_W - 1.0)
     return {
         "tof_diff_normalized": tof_diff,
         "tof_tumor_raw": tof_raw,
@@ -107,8 +111,8 @@ def test_stage1_initializer_uses_diff_search_uses_raw(monkeypatch, tmp_path: Pat
         if ft_calls[0] == 1:
             return np.array([[1.0]], dtype=np.float64)
         h, w = sos_phys.shape[-2], sos_phys.shape[-1]
-        assert (h, w) == (128, 128)
-        return np.full((32, 32), raw_v, dtype=np.float64)
+        assert (h, w) == (ANATOMY_H, ANATOMY_W)
+        return np.full((TOF_H, TOF_W), raw_v, dtype=np.float64)
 
     def fake_stage1a_search(batch, *args, **kwargs):
         del args, kwargs
@@ -116,8 +120,8 @@ def test_stage1_initializer_uses_diff_search_uses_raw(monkeypatch, tmp_path: Pat
         return {
             "best_alpha": 1.0,
             "best_loss": 0.0,
-            "best_c_map": np.full((128, 128), 1.5),
-            "tof_pred": np.full((32, 32), raw_v),
+            "best_c_map": np.full((ANATOMY_H, ANATOMY_W), 1.5),
+            "tof_pred": np.full((TOF_H, TOF_W), raw_v),
             "diagnostics": {},
         }
 
@@ -141,6 +145,10 @@ def test_stage1_initializer_uses_diff_search_uses_raw(monkeypatch, tmp_path: Pat
             "max_tof": 1000.0,
             "min_tof_diff": -1.0,
             "max_tof_diff": 1.0,
+            "tof_grid_height": TOF_H,
+            "tof_grid_width": TOF_W,
+            "anatomy_height": ANATOMY_H,
+            "anatomy_width": ANATOMY_W,
             "batch_size": 1,
             "num_workers": 0,
         },
@@ -210,6 +218,10 @@ def test_stage1_preflight_fails_without_tof_diff_normalized(monkeypatch, tmp_pat
             "max_tof": 1000.0,
             "min_tof_diff": -1.0,
             "max_tof_diff": 1.0,
+            "tof_grid_height": TOF_H,
+            "tof_grid_width": TOF_W,
+            "anatomy_height": ANATOMY_H,
+            "anatomy_width": ANATOMY_W,
             "batch_size": 1,
             "num_workers": 0,
         },

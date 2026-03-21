@@ -1,7 +1,8 @@
 """Stage 0: train initializer (tof_diff_normalized -> scaled residual delta_c0).
 
-Supports SR grid [B,1,32,32] or measurement grid [B,1,S,R] with backprojection+U-Net.
+Supports SR grid [B,1,H_tof,W_tof] or measurement grid [B,1,S,R] with backprojection+U-Net.
 Input is `tof_diff_normalized` from the dataset. Target: delta above normalized_c_base.
+Spatial sizes come from config (tof_grid_height/width, anatomy_height/width).
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ def _ensure_tof_tumor_4d(tof_map: torch.Tensor) -> torch.Tensor:
 
 
 def ensure_tof_measurement_grid(tof_map: torch.Tensor) -> torch.Tensor:
-    """Normalize diff ToF to [B, 1, S, R] (no resize to 32x32)."""
+    """Normalize diff ToF to [B, 1, S, R] (no spatial resize)."""
     if tof_map.dim() == 2:
         return tof_map.unsqueeze(0).unsqueeze(0)
     if tof_map.dim() == 3:

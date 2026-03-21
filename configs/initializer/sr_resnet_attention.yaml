@@ -4,3 +4,7 @@ output_channels: 1
 base_filters: 64
 use_attention: true
 use_residual: true
+tof_input_height: ${data.tof_grid_height}
+tof_input_width: ${data.tof_grid_width}
+output_height: ${data.anatomy_height}
+output_width: ${data.anatomy_width}

@@ -1,4 +1,4 @@
-"""Stage 0 training entrypoint: SR (32x32) or backprojection+U-Net (S,R grid) initializer."""
+"""Stage 0 training entrypoint: SR (tof_grid) or backprojection+U-Net (S,R grid) initializer."""
 
 import sys
 from pathlib import Path

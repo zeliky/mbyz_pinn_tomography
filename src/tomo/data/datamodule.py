@@ -44,6 +44,8 @@ class TomographyDataModule:
             "receivers_amount": c.get("receivers_amount", 32),
             "anatomy_width": c.get("anatomy_width", 128),
             "anatomy_height": c.get("anatomy_height", 128),
+            "tof_grid_height": c.get("tof_grid_height", 64),
+            "tof_grid_width": c.get("tof_grid_width", 64),
         }
 
     def setup(self) -> None:

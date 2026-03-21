@@ -103,13 +103,15 @@ def _run_stage1_preflight(
     tof_output_scale: float,
     coord_range: tuple[float, float] | None,
     *,
+    anatomy_height: int = 128,
+    anatomy_width: int = 128,
     preflight_tof_ratio_min: float = 0.01,
     preflight_tof_ratio_max: float = 100.0,
 ) -> None:
     """Run preflight checks before Stage 1A/1B. Exits with clear message on failure."""
     # 1. FMM wrapper can run
     try:
-        H, W = 128, 128
+        H, W = anatomy_height, anatomy_width
         sos_phys = np.full((H, W), c_base_phys, dtype=np.float64)
         x_s = np.array([[0.0, 0.0]], dtype=np.float64)
         x_r = np.array([[W - 1.0, H - 1.0]], dtype=np.float64)
@@ -138,15 +140,16 @@ def _run_stage1_preflight(
     obs = _initializer_observation(batch, 0, initializer_tof_4d, initializer._net)
     with torch.no_grad():
         state = initializer(obs)
+    target_shape = (anatomy_height, anatomy_width)
     c0_phys = (
         state.c_map_2d.cpu().numpy()
         if state.c_map_2d is not None
-        else state.c_values.reshape(128, 128).cpu().numpy()
+        else state.c_values.reshape(*target_shape).cpu().numpy()
     )
     delta_c0_phys = c0_phys - c_base_phys
-    if delta_c0_phys.shape != (128, 128):
+    if delta_c0_phys.shape != target_shape:
         print(
-            f"Stage 1 preflight failed: delta_c0 shape {delta_c0_phys.shape} != (128, 128).",
+            f"Stage 1 preflight failed: delta_c0 shape {delta_c0_phys.shape} != {target_shape}.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -156,9 +159,9 @@ def _run_stage1_preflight(
 
     c_base_scaled = to_scaled_sos(c_base_phys, min_sos, max_sos)
     delta_c0_scaled = physical_delta_to_scaled(delta_c0_phys, min_sos, max_sos)
-    if delta_c0_scaled.shape != (128, 128):
+    if delta_c0_scaled.shape != target_shape:
         print(
-            f"Stage 1 preflight failed: delta_c0_scaled shape {delta_c0_scaled.shape} != (128, 128).",
+            f"Stage 1 preflight failed: delta_c0_scaled shape {delta_c0_scaled.shape} != {target_shape}.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -168,7 +171,8 @@ def _run_stage1_preflight(
 
     # 4. c_map_scaled stats in [0, 1]
     c_map_scaled = params_to_c_map_scaled(
-        np.array([1.0]), c_base_scaled, delta_c0_scaled, "stage1a", target_h=128, target_w=128
+        np.array([1.0]), c_base_scaled, delta_c0_scaled, "stage1a",
+        target_h=anatomy_height, target_w=anatomy_width,
     )
     c_min_s, c_max_s = float(np.min(c_map_scaled)), float(np.max(c_map_scaled))
     if c_min_s < -0.01 or c_max_s > 1.01:
@@ -309,8 +313,12 @@ def run_stage1_operator_baseline(
         init_net = instantiate(cfg)
         expected_model_type = str(getattr(init_net, "model_type", "")) or None
 
+    tof_h = data_config.get("tof_grid_height", 64)
+    tof_w = data_config.get("tof_grid_width", 64)
+    anatomy_h = data_config.get("anatomy_height", 128)
+    anatomy_w = data_config.get("anatomy_width", 128)
     initializer = UNetInitializer(
-        num_nodes=128 * 128,
+        num_nodes=anatomy_h * anatomy_w,
         c0_fallback=float(c_base_phys),
         min_sos=min_sos,
         max_sos=max_sos,
@@ -318,6 +326,8 @@ def run_stage1_operator_baseline(
         device=device,
         net=init_net,
         expected_model_type=expected_model_type,
+        tof_input_height=tof_h,
+        tof_input_width=tof_w,
     )
     initializer.load_checkpoint(checkpoint_path, device=device)
     initializer._net.eval()
@@ -341,6 +351,8 @@ def run_stage1_operator_baseline(
         c_max_phys,
         tof_output_scale,
         coord_range,
+        anatomy_height=anatomy_h,
+        anatomy_width=anatomy_w,
         preflight_tof_ratio_min=preflight_tof_ratio_min,
         preflight_tof_ratio_max=preflight_tof_ratio_max,
     )
@@ -381,7 +393,7 @@ def run_stage1_operator_baseline(
             c0_phys = (
                 state.c_map_2d.cpu().numpy()
                 if state.c_map_2d is not None
-                else state.c_values.reshape(128, 128).cpu().numpy()
+                else state.c_values.reshape(anatomy_h, anatomy_w).cpu().numpy()
             )
             delta_c0_phys = c0_phys - c_base_phys
             delta_c0_scaled = physical_delta_to_scaled(delta_c0_phys, min_sos, max_sos)

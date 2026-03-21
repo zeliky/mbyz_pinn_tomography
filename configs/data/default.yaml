@@ -15,5 +15,13 @@ max_tof: 1000.0
 min_tof_diff: -1.0
 max_tof_diff: 1.0
 
+# TOF matrix spatial dimensions (S x R). Must divide anatomy_width/height evenly.
+tof_grid_height: 64
+tof_grid_width: 64
+
+# Anatomy/SOS map spatial dimensions (output of initializer).
+anatomy_width: 128
+anatomy_height: 128
+
 batch_size: 4
 num_workers: 0

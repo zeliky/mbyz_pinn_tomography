@@ -98,6 +98,8 @@ class TofDataset(Dataset):
         receivers_amount: int = 32,
         anatomy_width: int = 128,
         anatomy_height: int = 128,
+        tof_grid_height: int = 64,
+        tof_grid_width: int = 64,
     ) -> None:
         super().__init__()
         self._modes = list(modes)
@@ -112,6 +114,8 @@ class TofDataset(Dataset):
         self._receivers_amount = receivers_amount
         self._anatomy_width = anatomy_width
         self._anatomy_height = anatomy_height
+        self._tof_grid_height = tof_grid_height
+        self._tof_grid_width = tof_grid_width
         self._files_index: list[dict[str, Any]] = []
         self._build_files_index()
 
@@ -171,11 +175,30 @@ class TofDataset(Dataset):
             raise ValueError(
                 f"Missing tof_tumor_raw in {entry['mat']} (need full save; mat_minimal is unsupported for training)."
             )
+        if tt.shape != (self._tof_grid_height, self._tof_grid_width):
+            raise ValueError(
+                f"tof_tumor_raw shape {tt.shape} in {entry['mat']} != expected "
+                f"({self._tof_grid_height}, {self._tof_grid_width}) from config."
+            )
+        fh = self._anatomy_height // self._tof_grid_height
+        fw = self._anatomy_width // self._tof_grid_width
+        if fh * self._tof_grid_height != self._anatomy_height:
+            raise ValueError(
+                f"anatomy_height ({self._anatomy_height}) must be divisible by "
+                f"tof_grid_height ({self._tof_grid_height})."
+            )
+        if fw * self._tof_grid_width != self._anatomy_width:
+            raise ValueError(
+                f"anatomy_width ({self._anatomy_width}) must be divisible by "
+                f"tof_grid_width ({self._tof_grid_width})."
+            )
         denom = self._max_tof - self._min_tof
         if denom <= 0:
             raise ValueError("max_tof must be greater than min_tof")
         normalized_tof = (tt - self._min_tof) / denom
-        tof_upsampled = np.repeat(np.repeat(normalized_tof, 4, axis=0), 4, axis=1)
+        tof_upsampled = np.repeat(
+            np.repeat(normalized_tof, fh, axis=0), fw, axis=1
+        )
         tof_tumor_normalized_grid = np.expand_dims(tof_upsampled, axis=0)
 
         sos = mat_np["sos_map"]

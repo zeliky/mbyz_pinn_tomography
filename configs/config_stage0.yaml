@@ -5,7 +5,7 @@
 defaults:
   - _self_
   - data: default
-  - initializer: sr_resnet_baseline
+  - initializer: stage0_backproj_unet
   - training: stage0
 
 seed: 42

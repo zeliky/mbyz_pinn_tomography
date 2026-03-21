@@ -19,9 +19,9 @@ from tomo.training.stage0_initializer import (
 
 
 def test_sr_initializer_net_baseline_shapes() -> None:
-    """SRInitializerNet (no attention): [B, 1, 32, 32] -> delta_c0 [B, 1, 128, 128]."""
+    """SRInitializerNet (no attention): [B, 1, 64, 64] -> delta_c0 [B, 1, 128, 128]."""
     model = SRInitializerNet(use_attention=False)
-    x = torch.randn(2, 1, 32, 32)
+    x = torch.randn(2, 1, 64, 64)
     out = model(x)
     assert out.shape == (2, 1, 128, 128)
     assert out.min() >= 0.0 and out.max() <= 1.0
@@ -30,7 +30,7 @@ def test_sr_initializer_net_baseline_shapes() -> None:
 def test_sr_initializer_net_attention_shapes() -> None:
     """SRInitializerNet (with attention): same shapes."""
     model = SRInitializerNet(use_attention=True)
-    x = torch.randn(2, 1, 32, 32)
+    x = torch.randn(2, 1, 64, 64)
     out = model(x)
     assert out.shape == (2, 1, 128, 128)
     assert out.min() >= 0.0 and out.max() <= 1.0
@@ -44,12 +44,12 @@ def test_ensure_tof_measurement_grid_shape() -> None:
 
 
 def test_ensure_tof_tumor_4d() -> None:
-    """_ensure_tof_tumor_4d adds channel dim when tensor is [B, 32, 32]."""
-    x3 = torch.randn(3, 32, 32)
+    """_ensure_tof_tumor_4d adds channel dim when tensor is [B, H, W]."""
+    x3 = torch.randn(3, 64, 64)
     x4 = _ensure_tof_tumor_4d(x3)
-    assert x4.shape == (3, 1, 32, 32)
-    x4_already = torch.randn(3, 1, 32, 32)
-    assert _ensure_tof_tumor_4d(x4_already).shape == (3, 1, 32, 32)
+    assert x4.shape == (3, 1, 64, 64)
+    x4_already = torch.randn(3, 1, 64, 64)
+    assert _ensure_tof_tumor_4d(x4_already).shape == (3, 1, 64, 64)
 
 
 def test_normalized_c_base_from_config() -> None:
@@ -84,7 +84,7 @@ def test_stage0_one_step_backward_residual() -> None:
     normalized_c_base = normalized_c_base_from_config(0.1, 2.1, 1.5)
     anatomy = torch.rand(2, 1, 128, 128)
     batch = {
-        "tof_diff_normalized": torch.rand(2, 1, 32, 32),
+        "tof_diff_normalized": torch.rand(2, 1, 64, 64),
         "sos_map_normalized": anatomy,
     }
     device = torch.device("cpu")
@@ -110,7 +110,7 @@ def test_stage0_forward_pass_scaled_to_physical() -> None:
     model.eval()
     min_sos, max_sos = 0.1, 2.1
     normalized_c_base = normalized_c_base_from_config(min_sos, max_sos, 1.5)
-    x = torch.rand(2, 1, 32, 32)
+    x = torch.rand(2, 1, 64, 64)
     with torch.no_grad():
         delta_pred = model(x)
     c0_normalized = c0_normalized_from_delta(normalized_c_base, delta_pred)
@@ -123,7 +123,7 @@ def test_stage0_forward_pass_scaled_to_physical() -> None:
 
 
 def test_stage0_backproj_unet_one_step(tmp_path) -> None:
-    """One optimizer step: Stage0BackprojUNet with tiny operator on 32x32 grid."""
+    """One optimizer step: Stage0BackprojUNet with tiny operator on minimal grid."""
     pytest.importorskip("monai")
 
     from tomo.geometry.build_backprojection_operator import (
