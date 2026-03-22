@@ -93,16 +93,11 @@ function runProduction1()
         [tt, ~, tmap_t, ~] = tofTravelTimeFromGeom(geom, V_t);
         tdiff = tt - th;
 
-        data_to_save.Vh = V_h;
-        data_to_save.Vt = V_t;
-        data_to_save.Mask = Mask;
-        data_to_save.th = th;
-        data_to_save.tt = tt;
-        data_to_save.tdiff = tdiff;
-        data_to_save.tmap_h = tmap_h;
-        data_to_save.tmap_t = tmap_t;
-        data_to_save.x_s = geom.S;
-        data_to_save.x_r = geom.R;
+        data_to_save = struct( ...
+            'Vh', V_h, 'Vt', V_t, 'Mask', Mask, ...
+            'th', th, 'tt', tt, 'tdiff', tdiff, ...
+            'tmap_h', tmap_h, 'tmap_t', tmap_t, ...
+            'x_s', geom.S, 'x_r', geom.R);
 
         save_comprehensive_sample(data_to_save, cfg_a, sample_id);
 

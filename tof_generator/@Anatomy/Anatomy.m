@@ -52,6 +52,37 @@ classdef Anatomy < handle
             this.y = linspace(1,this.n,this.n);
             this.z=1;
         end
+
+
+        function [x, y] = ellipticalTumorPosition(this, type, ra_p, rb_p, ra_t, gs)
+            % gs: grid_size, ra_p/rb_p: prostate radii, ra_t: tumor radius
+            
+            % Calculate safe boundaries so the tumor stays inside the prostate
+            margin = ra_t + 2; 
+            max_ra = ra_p - margin;
+            max_rb = rb_p - margin;
+        
+            if strcmp(type, 'center')
+                % Tight cluster around the center
+                x = gs/2 + (rand-0.5)*5; 
+                y = gs/2 + (rand-0.5)*5;
+            
+            elseif strcmp(type, 'peripheral')
+                % Samples specifically along the outer edge of the prostate
+                theta = rand * 2 * pi;
+                x = gs/2 + max_ra * cos(theta); 
+                y = gs/2 + max_rb * sin(theta);
+            
+            else % 'random' or 'mid'
+                % Uniform area sampling within the ellipse
+                theta = rand * 2 * pi;
+                r_factor = sqrt(rand); % Square root ensures uniform distribution
+                x = gs/2 + max_ra * r_factor * cos(theta); 
+                y = gs/2 + max_rb * r_factor * sin(theta);
+            end
+        end
+
+
     end
 end
 function [x y] =ellipse(ra,rb,ang,x0,y0,C,Nb)
